@@ -1,0 +1,40 @@
+/* eslint-disable @typescript-eslint/no-unused-expressions, no-undef */
+async (page) => {
+  const outputRoot = 'output/playwright/iteration';
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('http://localhost:5173/__visual-audit?scene=awaiting&players=8');
+  await page.waitForTimeout(450);
+  const deckStart = await page.locator('[data-table-zone="deck"]').boundingBox();
+  await page.locator('[data-table-zone="deck"]').click();
+  await page.waitForTimeout(70);
+  if (await page.locator('.swap-flight-layer.draw .card-flight').count() !== 1) throw new Error('Drawing did not launch one spatial card flight.');
+  const drawStart = await page.locator('.swap-flight-layer.draw .card-flight').boundingBox();
+  const startDistance = deckStart && drawStart ? Math.hypot((drawStart.x + drawStart.width / 2) - (deckStart.x + deckStart.width / 2), (drawStart.y + drawStart.height / 2) - (deckStart.y + deckStart.height / 2)) : Infinity;
+  if (startDistance > 90) throw new Error(`Draw flight did not begin at the deck (${Math.round(startDistance)}px away).`);
+  await page.waitForTimeout(270);
+  const drawMiddle = await page.locator('.swap-flight-layer.draw .card-flight').boundingBox();
+  if (!drawMiddle || Math.hypot(drawMiddle.x - drawStart.x, drawMiddle.y - drawStart.y) < 24) throw new Error('Drawn card did not visibly travel away from the deck.');
+  await page.screenshot({ path: `${outputRoot}/draw-flight-mid-390x844.png` });
+  await page.waitForTimeout(470);
+  if (await page.locator('.drawn-panel').count() !== 1 || await page.locator('.drawn-panel .playing-card').getAttribute('data-card-id') !== 'audit-drawn') throw new Error('Drawn card did not land in its decision panel.');
+  await page.locator('.discard-drawn').click();
+  await page.waitForTimeout(70);
+  if (await page.locator('.swap-flight-layer.discard .card-flight').count() !== 1) throw new Error('Discarding the drawn card did not launch a card flight.');
+  if ((await page.locator('.card-flight').getAttribute('data-flight-card')) !== 'audit-drawn') throw new Error('Discard flight is not carrying the drawn card.');
+  await page.waitForTimeout(520);
+  if ((await page.locator('.flight-front strong').textContent()) !== '10') throw new Error('Discard flight did not reveal the authoritative rank.');
+  await page.screenshot({ path: `${outputRoot}/draw-discard-mid-390x844.png` });
+  await page.waitForTimeout(440);
+  if ((await page.locator('[data-table-zone="discard"] .playing-card').getAttribute('data-card-id')) !== 'audit-drawn') throw new Error('Drawn card did not land on discard.');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('http://localhost:5173/__visual-audit?scene=awaiting&players=4');
+  await page.waitForTimeout(350);
+  await page.locator('[data-table-zone="deck"]').click();
+  await page.waitForTimeout(80);
+  const reducedFlight = page.locator('.card-flight');
+  if (await reducedFlight.count() && Number(await reducedFlight.evaluate((element) => window.getComputedStyle(element).opacity)) > .05) throw new Error('Reduced-motion mode left a traveling card visibly animated.');
+  if (await page.locator('.drawn-panel').count() !== 1) throw new Error('Reduced-motion draw did not settle into the decision state.');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  return { draw: 'deck to decision to discard', players: 8, viewport: '390x844', reducedMotion: 'settled' };
+}

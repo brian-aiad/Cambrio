@@ -74,6 +74,7 @@ function makeRoom(scene: string, playerCount: number): RoomView {
     game.transfer = { fromPlayerId: self.id, toPlayerId: players[1].id, deadlineAt: Date.now() + 38_000 };
   }
   if (scene === 'ending') game.ending = { triggerPlayerId: players[1].id, reason: 'cambio', turnsRemaining: playerCount + 1 };
+  if (scene === 'zero') game.ending = { triggerPlayerId: self.id, reason: 'zero_cards', turnsRemaining: playerCount };
   if (scene === 'results') {
     players[0].cards.push({ id: 'p0-card-4', slot: 4 }, { id: 'p0-card-5', slot: 5 });
     players[1].cards.push({ id: 'p1-card-4', slot: 4 });
@@ -114,9 +115,18 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
     self.cards = self.cards.map((card) => ({ id: card.id, slot: card.slot }));
     self.initialPeekComplete = true;
   } else if (action.type === 'DRAW' && game.turnStage === 'awaiting_draw') {
+    game.deckCount = Math.max(0, game.deckCount - 1);
     game.stackOpen = false;
     game.turnStage = 'deciding';
     game.drawnCard = faceCard('audit-drawn', -1, '10', 'hearts');
+    if (self.cards.length === 0) {
+      game.discard = game.drawnCard;
+      game.drawnCard = undefined;
+      game.discardGeneration += 1;
+      game.stackOpen = true;
+      game.turnStage = 'awaiting_draw';
+      game.activePlayerId = followingPlayer;
+    }
   } else if (action.type === 'DISCARD_DRAWN' && game.drawnCard) {
     game.discard = game.drawnCard;
     game.drawnCard = undefined;

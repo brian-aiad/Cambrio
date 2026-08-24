@@ -1,4 +1,4 @@
-import { AnimatePresence, LayoutGroup, motion } from 'framer-motion';
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion';
 import { ArrowRight, Check, Copy, Link2, UserRound, Volume2, VolumeX, Waves, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
@@ -291,29 +291,45 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
     if (!previous) return;
     const moved = [...current.locations.entries()].filter(([cardId, location]) => {
       const before = previous.locations.get(cardId);
-      return before && before.playerId !== location.playerId;
+      return before && !sameLocation(before, location);
     });
+    const handMoves = moved.filter(([cardId, destination]) => previous.locations.get(cardId)?.zone === 'hand' && destination.zone === 'hand');
     let cue: TableCue | undefined;
-    if (moved.length >= 2) {
-      const movements = moved.slice(0, 2).map(([cardId, destination]) => ({ cardId, from: previous.locations.get(cardId)!, to: destination }));
+    if (handMoves.length >= 2) {
+      const movements = handMoves.slice(0, 2).map(([cardId, destination]) => ({ cardId, from: previous.locations.get(cardId)!, to: destination }));
       cue = { id: game.version, kind: 'exchange', title: previous.powerKind === 'black_king' ? 'Black King swap' : 'Blind swap', movements, from: locationLabel(movements[0].from), to: locationLabel(movements[0].to) };
+    } else if (current.discardId && current.discardId !== previous.discardId) {
+      const source = previous.locations.get(current.discardId)
+        ?? (previous.turnStage === 'deciding' ? { zone: 'drawn' } as const : previous.turnStage === 'awaiting_draw' ? { zone: 'deck' } as const : undefined);
+      if (source) {
+        const kind = previous.stackOpen && source.zone === 'hand' ? 'stack' : 'discard';
+        const discard: TableLocation = { zone: 'discard' };
+        const discarded: TableMovement = { cardId: current.discardId, from: source, to: discard, face: game.discard, faceDirection: 'reveal' };
+        const enteringHand = moved.find(([cardId, destination]) => cardId !== current.discardId && destination.zone === 'hand' && (previous.locations.get(cardId)?.zone === 'drawn'))
+          ?? [...current.locations.entries()].find(([cardId, destination]) => cardId !== current.discardId && destination.zone === 'hand' && !previous.locations.has(cardId));
+        if (kind !== 'stack' && source.zone === 'hand' && enteringHand) {
+          const [cardId, destination] = enteringHand;
+          const incomingFace = previous.drawn?.id === cardId ? previous.drawn : undefined;
+          const incoming: TableMovement = { cardId, from: { zone: 'drawn' }, to: destination, face: incomingFace, faceDirection: incomingFace ? 'conceal' : undefined };
+          cue = { id: game.version, kind: 'replace', title: 'Card replaced', movements: [discarded, incoming], from: 'Drawn card', to: locationLabel(destination) };
+        } else {
+          const title = kind === 'stack' ? 'Card stacked' : source.zone === 'drawn' ? 'Drawn card discarded' : 'Card replaced';
+          cue = { id: game.version, kind, title, movements: [discarded], from: locationLabel(source), to: 'Discard' };
+        }
+      }
+    } else if (previous.turnStage === 'awaiting_draw' && current.turnStage === 'deciding') {
+      const drawn = current.drawn;
+      cue = { id: game.version, kind: 'draw', title: 'Card drawn', movements: [{ cardId: drawn?.id ?? `draw-${game.version}`, from: { zone: 'deck' }, to: { zone: 'drawn' }, face: drawn, faceDirection: drawn ? 'reveal' : undefined }], from: 'Deck', to: 'Drawn card' };
     } else if (moved.length === 1) {
       const [cardId, destination] = moved[0];
       const source = previous.locations.get(cardId)!;
       const movements = [{ cardId, from: source, to: destination }];
       cue = { id: game.version, kind: 'transfer', title: 'Card transfer', movements, from: locationLabel(source), to: locationLabel(destination) };
-    } else if (current.discardId && current.discardId !== previous.discardId) {
-      const source = previous.locations.get(current.discardId);
-      if (source) {
-        const kind = previous.stackOpen ? 'stack' : 'discard';
-        const discard: TableLocation = { zone: 'discard' };
-        cue = { id: game.version, kind, title: kind === 'stack' ? 'Card stacked' : 'Card swapped', movements: [{ cardId: current.discardId, from: source, to: discard, face: game.discard }], from: locationLabel(source), to: 'Discard' };
-      }
     }
     if (!cue) return;
     setTableCue(cue);
     window.clearTimeout(cueTimer.current);
-    cueTimer.current = window.setTimeout(() => setTableCue(undefined), cue.kind === 'exchange' ? 2_100 : 1_650);
+    cueTimer.current = window.setTimeout(() => setTableCue(undefined), cue.kind === 'draw' ? 900 : cue.kind === 'exchange' || cue.kind === 'replace' ? 2_100 : 1_650);
   // A new authoritative game version is the animation trigger.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.version]);
@@ -384,7 +400,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
 
   return (
     <LayoutGroup id={`table-${game.id}`}>
-    <motion.main className={`game-page ${stackReady ? 'stack-mode' : ''}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+    <motion.main className={`game-page ${stackReady ? 'stack-mode' : ''} ${revealVisible ? 'reveal-focus-mode' : ''}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="game-status"><span className="room-pill" data-short={room.code.slice(0, 2)}>{room.code}</span><TurnBanner game={game} self={self} /><Countdown deadline={game.deadlineAt} /></div>
       <section className="opponent-rail" aria-label="Other players" style={{ '--opponent-count': Math.max(1, opponents.length) } as CSSProperties}>
         {opponents.map((opponent) => <PlayerHand key={opponent.id} player={opponent} compact canInteract={() => canInteract(opponent)} highlight={() => isContextTarget(opponent)} selectedCards={power?.targets} arrivingSlots={flightSlots(tableCue, opponent.id)} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, opponent)} active={game.activePlayerId === opponent.id} />)}
@@ -393,10 +409,11 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
       <section className="table-center">
         <div className="pile-zone">
           <div className={`pile ${tableCue?.movements.some((movement) => movement.to.zone === 'discard') ? 'receiving-flight' : ''}`} data-table-zone="discard"><Card card={game.discard} faceDown={!game.discard} /><span>{game.discard ? 'DISCARD' : 'EMPTY'}</span></div>
-          <button className={`deck-card ${isTurn && game.turnStage === 'awaiting_draw' ? 'draw-ready' : ''}`} disabled={!isTurn || game.turnStage !== 'awaiting_draw' || Boolean(game.transfer)} onClick={() => { vibrate(10); void send({ type: 'DRAW' }); }} title={`Draw from deck; ${game.deckCount} cards remain`}><CardBackMark /><small>{game.deckCount}</small></button>
+          <button data-table-zone="deck" className={`deck-card ${isTurn && game.turnStage === 'awaiting_draw' ? 'draw-ready' : ''}`} disabled={!isTurn || game.turnStage !== 'awaiting_draw' || Boolean(game.transfer)} onClick={() => { vibrate(10); void send({ type: 'DRAW' }); }} title={`Draw from deck; ${game.deckCount} cards remain`}><CardBackMark /><small>{game.deckCount}</small></button>
         </div>
+        <span className="drawn-flight-anchor" data-table-zone="drawn" aria-hidden="true" />
         <AnimatePresence mode="wait">
-          {game.drawnCard ? <motion.div key="drawn" className="drawn-panel" initial={{ opacity: 0, x: 34, scale: .94 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={{ opacity: 0, x: -18, scale: .97 }} transition={{ duration: .2, ease: [0.22, 1, 0.36, 1] }}><span>DRAWN</span><Card card={game.drawnCard} /><div className="drawn-actions"><button className="primary discard-drawn" onClick={() => { vibrate(12); void send({ type: 'DISCARD_DRAWN' }); }}><GameGlyph kind="discard" />Discard</button>{self.cards.length > 0 && <small>or tap a glowing slot to keep it</small>}</div></motion.div> : stackReady ? <motion.div key="stack-open" className="stack-hint" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .1 }}><GameGlyph kind="stack" /><strong>STACK OPEN</strong><span>Tap any remembered matching card</span></motion.div> : stackBlockedByLimit ? <motion.div key="stack-limit" className="stack-hint limit" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .1 }}><GameGlyph kind="stack" /><strong>6-CARD LIMIT</strong><span>Reduce your hand before stacking again</span></motion.div> : null}
+          {game.drawnCard ? <motion.div key="drawn" data-table-zone="drawn-card" className={`drawn-panel ${tableCue?.kind === 'draw' ? 'receiving-draw' : ''}`} initial={{ opacity: 0, scale: .98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .98 }} transition={{ duration: .16, ease: [0.22, 1, 0.36, 1] }}><span>DRAWN</span><Card card={game.drawnCard} /><div className="drawn-actions"><button className="primary discard-drawn" onClick={() => { vibrate(12); void send({ type: 'DISCARD_DRAWN' }); }}><GameGlyph kind="discard" />Discard</button>{self.cards.length > 0 && <small>or tap a glowing slot to keep it</small>}</div></motion.div> : stackReady ? <motion.div key="stack-open" className="stack-hint" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .1 }}><GameGlyph kind="stack" /><strong>STACK OPEN</strong><span>Tap any remembered matching card</span></motion.div> : stackBlockedByLimit ? <motion.div key="stack-limit" className="stack-hint limit" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .1 }}><GameGlyph kind="stack" /><strong>6-CARD LIMIT</strong><span>Reduce your hand before stacking again</span></motion.div> : null}
         </AnimatePresence>
       </section>
 
@@ -404,7 +421,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
       <div className="game-actions">{!game.ending && <button className="cambio-button" onClick={() => { vibrate(24); void send({ type: 'CALL_CAMBIO' }); }}><GameGlyph kind="cambio" />Call Cambrio</button>}</div>
       <AnimatePresence>{stackFeedback && stackFeedback.kind !== 'trying' && <motion.div className={`stack-result ${stackFeedback.kind}`} initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, y: -8 }}>{stackFeedback.kind === 'correct' ? 'MATCH — STACKED' : stackFeedback.kind === 'wrong' ? 'NO MATCH — PENALTY CARD' : 'STACK ALREADY TAKEN'}</motion.div>}</AnimatePresence>
       <AnimatePresence>{tableCue && <SwapFlightLayer key={`flight-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
-      <AnimatePresence>{tableCue && tableCue.kind !== 'stack' && <TableActionCue key={`cue-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
+      <AnimatePresence>{tableCue && tableCue.kind !== 'stack' && tableCue.kind !== 'draw' && <TableActionCue key={`cue-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
       <InteractionOverlay game={game} self={self} revealVisible={revealVisible} send={send} />
     </motion.main>
     </LayoutGroup>
@@ -487,62 +504,79 @@ function Results({ room, game, sendRoom }: { room: RoomView; game: GameView; sen
 
 type StackFeedback = 'trying' | 'correct' | 'wrong' | 'closed';
 type HandLocation = { zone: 'hand'; playerId: string; playerName: string; slot: number };
-type TableLocation = HandLocation | { zone: 'discard' };
-type TableMovement = { cardId: string; from: TableLocation; to: TableLocation; face?: CardView };
-type TableCue = { id: number; kind: 'exchange' | 'transfer' | 'discard' | 'stack'; title: string; from: string; to: string; movements: TableMovement[] };
-type TableSnapshot = { locations: Map<string, HandLocation>; discardId?: string; powerKind?: PowerKind; stackOpen: boolean };
+type TableLocation = HandLocation | { zone: 'discard' } | { zone: 'deck' } | { zone: 'drawn' };
+type TableMovement = { cardId: string; from: TableLocation; to: TableLocation; face?: CardView; faceDirection?: 'reveal' | 'conceal' };
+type TableCue = { id: number; kind: 'draw' | 'exchange' | 'replace' | 'transfer' | 'discard' | 'stack'; title: string; from: string; to: string; movements: TableMovement[] };
+type TableSnapshot = { locations: Map<string, TableLocation>; discardId?: string; drawn?: CardView; deckCount: number; turnStage?: GameView['turnStage']; powerKind?: PowerKind; stackOpen: boolean };
 
 function snapshotTable(game: GameView): TableSnapshot {
+  const locations = new Map<string, TableLocation>(game.players.flatMap((player) => player.cards.map((card) => [card.id, { zone: 'hand', playerId: player.id, playerName: player.name, slot: card.slot }] as const)));
+  if (game.drawnCard) locations.set(game.drawnCard.id, { zone: 'drawn' });
   return {
-    locations: new Map(game.players.flatMap((player) => player.cards.map((card) => [card.id, { zone: 'hand', playerId: player.id, playerName: player.name, slot: card.slot }] as const))),
+    locations,
     discardId: game.discard?.id,
+    drawn: game.drawnCard,
+    deckCount: game.deckCount,
+    turnStage: game.turnStage,
     powerKind: game.power?.kind,
     stackOpen: game.stackOpen,
   };
 }
 
 function locationLabel(location: TableLocation): string {
-  return location.zone === 'discard' ? 'Discard' : `${location.playerName} ${slotTag(location.slot)}`;
+  if (location.zone === 'hand') return `${location.playerName} ${slotTag(location.slot)}`;
+  if (location.zone === 'drawn') return 'Drawn card';
+  return location.zone === 'deck' ? 'Deck' : 'Discard';
+}
+
+function sameLocation(first: TableLocation, second: TableLocation): boolean {
+  if (first.zone !== second.zone) return false;
+  return first.zone !== 'hand' || (second.zone === 'hand' && first.playerId === second.playerId && first.slot === second.slot);
 }
 
 function flightSlots(cue: TableCue | undefined, playerId: string): number[] {
   return cue?.movements.flatMap((movement) => movement.to.zone === 'hand' && movement.to.playerId === playerId ? [movement.to.slot] : []) ?? [];
 }
 
-type FlightGeometry = { cardId: string; from: DOMRect; to: DOMRect; fromLabel: string; toLabel: string; face?: CardView };
+type FlightGeometry = { cardId: string; from: DOMRect; to: DOMRect; fromLabel: string; toLabel: string; face?: CardView; faceDirection?: 'reveal' | 'conceal' };
 
 function SwapFlightLayer({ cue }: { cue: TableCue }) {
   const [flights, setFlights] = useState<FlightGeometry[]>([]);
+  const reduceMotion = useReducedMotion();
   useLayoutEffect(() => {
     const measured = cue.movements.flatMap((movement) => {
       const from = locationRect(movement.from);
       const to = locationRect(movement.to);
-      return from && to ? [{ cardId: movement.cardId, from, to, fromLabel: locationLabel(movement.from), toLabel: locationLabel(movement.to), face: movement.face }] : [];
+      return from && to ? [{ cardId: movement.cardId, from, to, fromLabel: locationLabel(movement.from), toLabel: locationLabel(movement.to), face: movement.face, faceDirection: movement.faceDirection }] : [];
     });
     setFlights(measured);
   }, [cue]);
-  if (!flights.length) return null;
-  return <motion.div className={`swap-flight-layer ${cue.kind}`} initial={{ opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true">
+  if (!flights.length || reduceMotion) return null;
+  const duration = cue.kind === 'draw' ? .72 : cue.kind === 'discard' || cue.kind === 'stack' ? .92 : cue.kind === 'transfer' ? 1 : 1.12;
+  return <motion.div className={`swap-flight-layer ${cue.kind}`} style={{ '--flight-duration': `${duration}s` } as CSSProperties} initial={{ opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true">
     {flights.map((flight, index) => {
-      const middleLeft = (flight.from.left + flight.to.left) / 2 + (index === 0 ? -16 : 16);
-      const middleTop = (flight.from.top + flight.to.top) / 2 + (index === 0 ? -34 : 34);
-      return <motion.span key={flight.cardId} className={`card-flight flight-${index + 1}`} data-flight-card={flight.cardId}
+      const direction = index === 0 ? -1 : 1;
+      const middleLeft = (flight.from.left + flight.to.left) / 2 + direction * (cue.kind === 'draw' ? 5 : 16);
+      const middleTop = (flight.from.top + flight.to.top) / 2 + direction * (cue.kind === 'draw' ? 18 : 34);
+      return <motion.span key={flight.cardId} className={`card-flight flight-${index + 1} ${flight.faceDirection ? `face-${flight.faceDirection}` : ''}`} data-flight-card={flight.cardId}
         initial={{ left: flight.from.left, top: flight.from.top, width: flight.from.width, height: flight.from.height, rotate: index === 0 ? -2 : 2, scale: 1 }}
         animate={{ left: [flight.from.left, middleLeft, flight.to.left], top: [flight.from.top, middleTop, flight.to.top], width: [flight.from.width, Math.max(30, (flight.from.width + flight.to.width) / 2), flight.to.width], height: [flight.from.height, Math.max(42, (flight.from.height + flight.to.height) / 2), flight.to.height], rotate: index === 0 ? [-2, -8, 0] : [2, 8, 0], scale: [1, 1.08, 1] }}
-        transition={{ duration: 1.12, times: [0, .5, 1], ease: [0.22, 1, 0.36, 1] }}><span className="flight-surface flight-back"><CardBackMark /></span>{flight.face?.rank && flight.face.suit && <span className="flight-surface flight-front"><strong>{flight.face.rank}</strong><SuitMark suit={flight.face.suit} /></span>}<b>{index + 1}</b></motion.span>;
+        transition={{ duration, times: [0, .5, 1], ease: [0.22, 1, 0.36, 1] }}><span className="flight-surface flight-back"><CardBackMark /></span>{flight.face?.rank && flight.face.suit && <span className={`flight-surface flight-front ${flight.face.suit === 'hearts' || flight.face.suit === 'diamonds' ? 'red' : ''}`}><strong>{flight.face.rank}</strong><SuitMark suit={flight.face.suit} /></span>}{flights.length > 1 && <b>{index + 1}</b>}</motion.span>;
     })}
-    {flights.map((flight) => <motion.span key={`endpoint-${flight.cardId}`} className="flight-endpoint" style={{ left: flight.from.left, top: flight.from.top, width: flight.from.width, height: flight.from.height }} initial={{ opacity: 0, scale: .86 }} animate={{ opacity: [0, 1, 1, 0], scale: [0.86, 1.07, 1.02, 1] }} transition={{ duration: 1.3, times: [0, .12, .72, 1] }}><em>{flight.fromLabel}</em></motion.span>)}
+    {cue.kind !== 'draw' && flights.map((flight) => <motion.span key={`endpoint-${flight.cardId}`} className="flight-endpoint" style={{ left: flight.from.left, top: flight.from.top, width: flight.from.width, height: flight.from.height }} initial={{ opacity: 0, scale: .86 }} animate={{ opacity: [0, 1, 1, 0], scale: [0.86, 1.07, 1.02, 1] }} transition={{ duration: duration + .18, times: [0, .12, .72, 1] }}><em>{flight.fromLabel}</em></motion.span>)}
   </motion.div>;
 }
 
 function locationRect(location: TableLocation): DOMRect | undefined {
   if (location.zone === 'discard') return document.querySelector<HTMLElement>('[data-table-zone="discard"] .playing-card')?.getBoundingClientRect();
+  if (location.zone === 'deck') return document.querySelector<HTMLElement>('[data-table-zone="deck"]')?.getBoundingClientRect();
+  if (location.zone === 'drawn') return document.querySelector<HTMLElement>('[data-table-zone="drawn-card"] .playing-card')?.getBoundingClientRect() ?? document.querySelector<HTMLElement>('[data-table-zone="drawn"]')?.getBoundingClientRect();
   return document.querySelector<HTMLElement>(`.hand-slot[data-player-id="${location.playerId}"][data-slot="${location.slot}"]`)?.getBoundingClientRect();
 }
 
 function TableActionCue({ cue }: { cue: TableCue }) {
   return <motion.div className={`table-action-cue ${cue.kind}`} role="status" aria-live="polite" initial={{ opacity: 0, y: 10, scale: .94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, transition: { duration: .12 } }} transition={{ delay: .42, duration: .18 }}>
-    <span className="cue-cards" aria-hidden="true"><i /><i /></span>
+    {cue.kind === 'discard' ? <span className="cue-icon" aria-hidden="true"><GameGlyph kind="discard" /></span> : <span className="cue-cards" aria-hidden="true"><i /><i /></span>}
     <span><strong>{cue.title}</strong><small>{cue.from} <b>{cue.kind === 'exchange' ? '↔' : '→'}</b> {cue.to}</small></span>
   </motion.div>;
 }
