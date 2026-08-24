@@ -176,7 +176,7 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
     game.power = undefined;
     game.turnStage = 'awaiting_draw';
     game.activePlayerId = followingPlayer;
-  } else if (action.type === 'CALL_CAMBRIO') {
+  } else if (action.type === 'CALL_CAMBIO') {
     game.phase = 'ending';
     game.ending = { triggerPlayerId: self.id, reason: 'cambio', turnsRemaining: game.players.length + 1 };
   } else if (action.type === 'STACK_ATTEMPT' && action.targetCardId) {

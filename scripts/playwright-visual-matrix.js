@@ -16,7 +16,7 @@ async (page) => {
     'opponent-reveal', 'blind-own', 'blind-opponent', 'black-own',
     'black-opponent', 'black-reveal', 'transfer', 'ending', 'six', 'zero', 'results',
   ];
-  for (const scene of coreScenes) await capture(scene, scene === 'results' ? 2 : 4, { width: 390, height: 844 }, '', scene.includes('reveal') ? 180 : 420);
+  for (const scene of coreScenes) await capture(scene, scene === 'results' ? 2 : 4, { width: 390, height: 844 }, '', scene === 'ending' || scene === 'zero' ? 1_850 : scene.includes('reveal') ? 180 : 420);
   await capture('black-choice', 4, { width: 390, height: 844 }, '', 1_850);
 
   for (let players = 2; players <= 8; players += 1) await capture('awaiting', players, { width: 390, height: 844 });
@@ -36,8 +36,8 @@ async (page) => {
   }
   await capture('cards', 2, { width: 390, height: 844 });
   await capture('cards', 2, { width: 1440, height: 900 });
-  await capture('ending', 8, { width: 320, height: 568 });
-  await capture('ending', 8, { width: 844, height: 390 });
+  await capture('ending', 8, { width: 320, height: 568 }, '', 1_850);
+  await capture('ending', 8, { width: 844, height: 390 }, '', 1_850);
   await capture('results', 8, { width: 390, height: 844 });
 
   return { screenshots: coreScenes.length + 1 + 7 + devices.length * 5 + 5 };

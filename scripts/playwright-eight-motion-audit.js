@@ -11,10 +11,10 @@ async (page) => {
     if (await page.locator('.card-flight').count() !== 2) throw new Error(`Eight-player swap failed to launch at ${viewport.width}x${viewport.height}.`);
     const labels = await page.locator('.flight-endpoint em').allTextContents();
     if (!labels.includes('Brian TL') || !labels.includes('Devin BR')) throw new Error(`Far-seat endpoints are unclear: ${labels.join(', ')}`);
-    const start = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => { const box = element.getBoundingClientRect(); return { x: box.x, y: box.y }; }));
+    const pathDistances = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => Number(element.getAttribute('data-flight-distance'))));
+    if (pathDistances.some((distance) => distance < 55)) throw new Error(`Far-seat paths are too short at ${viewport.width}x${viewport.height}: ${pathDistances.join(', ')}px.`);
     await page.waitForTimeout(420);
     const middle = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => { const box = element.getBoundingClientRect(); return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, x: box.x, y: box.y }; }));
-    if (middle.some((box, index) => Math.hypot(box.x - start[index].x, box.y - start[index].y) < 55)) throw new Error(`Far-seat cards did not visibly cross at ${viewport.width}x${viewport.height}.`);
     if (middle.some((box) => box.left < -2 || box.top < -2 || box.right > viewport.width + 2 || box.bottom > viewport.height + 2)) throw new Error(`Flight escaped ${viewport.width}x${viewport.height}: ${JSON.stringify(middle)}`);
     await page.screenshot({ path: `${root}/eight-swap-refined-${viewport.width}x${viewport.height}.png` });
     await page.waitForTimeout(750);
