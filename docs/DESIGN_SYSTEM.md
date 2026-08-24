@@ -28,11 +28,12 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 - Tap the deck to draw.
 - After a draw, tap **Discard** or tap one highlighted owned slot to replace it.
 - During an open stack race, tap any remembered table card directly. There is no stack-mode button and no player-selection modal.
-- Power cards immediately highlight only legal targets. Prompts state the single next action and offer the quieter **Skip ability** escape.
+- Power cards immediately mark only legal targets. A compact numbered action strip shows the completed and current step; the selected source stays visibly numbered on the physical card, so Jack/Queen and Black King never depend on a sentence to explain what happens next. Dense eight-player rails keep the step strip but remove repeated number badges from every eligible opponent card.
 - Peeks reveal immediately after one legal card tap, remain visible for a short timed memory window, then conceal and complete automatically. Leaving or blurring the window conceals immediately.
 - Black King selects one owned card and then one opponent card, reveals both for the same timed memory window, then offers **Swap** or **Keep**.
 - The Black King decision is a distinct concealed server state: both ranks are removed from the browser projection before **Swap** or **Keep** appears.
 - Action hit areas never translate while awaiting input. The deck signals readiness with light and shadow only, so a fast touch, keyboard activation, and browser automation all acquire the same stable target.
+- A full mobile lobby becomes a two-column eight-seat grid with a visible capacity meter and an on-screen deal/ready control, including at 320×568. Join, ready, remove, draw, discard, target, and decision taps show a local pending state while waiting for the authoritative acknowledgement.
 
 ## Motion and feedback
 

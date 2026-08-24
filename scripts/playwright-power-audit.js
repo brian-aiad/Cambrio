@@ -9,6 +9,7 @@ async (page) => {
   await page.waitForTimeout(180);
   if (await page.locator('.playing-card:not(.face-down)').count() !== 2) throw new Error('Own peek did not reveal exactly one hand card plus the discard.');
   if (!(await page.locator('.interaction-prompt').textContent())?.includes('Memorize')) throw new Error('Own peek does not show the timed memory prompt.');
+  if ((await page.locator('.selection-order small').textContent()) !== 'PEEK') throw new Error('A peek target was mislabeled as a swap endpoint.');
   await page.screenshot({ path: `${root}/own-peek-auto-reveal.png` });
   await page.waitForTimeout(1_750);
   if (await page.locator('.playing-card:not(.face-down)').count() !== 1) throw new Error('Own peek did not conceal automatically.');
@@ -27,6 +28,8 @@ async (page) => {
   await page.locator('.self-zone [data-card-id="p0-card-0"]').click();
   await page.waitForTimeout(120);
   if (!(await page.locator('.interaction-prompt').textContent())?.includes("opponent's card")) throw new Error('Blind swap did not advance directly to opponent selection.');
+  if (!(await page.locator('.selection-order').textContent())?.includes('1FROM')) throw new Error('Blind swap did not keep a numbered marker on the selected source card.');
+  if (!(await page.locator('.sequence-step.done').textContent())?.includes('Your card') || !(await page.locator('.sequence-step.current').textContent())?.includes('Their card')) throw new Error('Blind swap did not show its completed and current visual steps.');
   await page.locator('.opponent-rail [data-card-id="p1-card-3"]').click();
   await page.waitForTimeout(160);
   await page.screenshot({ path: `${root}/blind-swap-complete.png` });
@@ -42,6 +45,7 @@ async (page) => {
   await page.waitForTimeout(1_750);
   if (!(await page.locator('.interaction-prompt').textContent())?.includes('Swap positions?')) throw new Error('Black King did not advance to the swap-or-keep choice.');
   if (await page.locator('.playing-card:not(.face-down)').count() !== 1) throw new Error('Black King target ranks remained in the rendered choice state after concealment.');
+  if (await page.locator('.selection-order').count() !== 2) throw new Error('Black King did not retain both numbered position markers for its decision.');
   await page.getByRole('button', { name: 'Swap', exact: true }).click();
   await page.waitForTimeout(160);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Black King swap did not launch two exact-position card flights.');
@@ -51,5 +55,11 @@ async (page) => {
   if (await page.locator('.self-zone [data-card-id="p1-card-2"]').count() !== 1) throw new Error('Black King swap did not preserve the selected self slot.');
   if (await page.locator('.opponent-rail [data-card-id="p0-card-1"]').count() !== 1) throw new Error('Black King swap did not preserve the selected opponent slot.');
 
-  return { ownPeek: 'auto', opponentPeek: 'auto', blindSwap: 'two taps', blackKing: 'reveal then swap' };
+  await page.goto('http://localhost:5173/__visual-audit?scene=blind-opponent&players=8');
+  await page.waitForTimeout(300);
+  if (await page.locator('.opponent-rail .target-cue:visible').count() !== 0) throw new Error('The dense eight-player rail repeated target badges across every card.');
+  if (await page.locator('.opponent-rail .playing-card.target-option').count() !== 28) throw new Error('The dense rail lost a legal blind-swap target.');
+  if (!(await page.locator('.action-sequence').textContent())?.includes('Their card')) throw new Error('The dense rail has no visual current-step indicator.');
+
+  return { ownPeek: 'auto', opponentPeek: 'auto', blindSwap: 'numbered two taps', blackKing: 'numbered reveal then swap', denseEightPlayerTargets: 28 };
 }
