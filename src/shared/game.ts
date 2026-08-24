@@ -259,8 +259,10 @@ export function applyGameCommand(
       delete state.temporaryReveals[player.id];
       if (activePlayers(state).every((candidate) => candidate.initialPeekComplete)) {
         state.phase = 'playing';
-        startTurn(state, state.turnOrder[0], now);
-        effects.push({ type: 'turn', playerId: state.turnOrder[0] });
+        const first = firstActiveTurnPlayer(state);
+        if (!first) fail('NO_ACTIVE_PLAYER', 'No active player can begin the round.');
+        startTurn(state, first, now);
+        effects.push({ type: 'turn', playerId: first });
       }
       break;
     }
@@ -737,11 +739,28 @@ function endTurn(state: GameState, now: number, effects: GameEffect[]): void {
     effects.push({ type: 'turn', playerId: next });
     return;
   }
-  const order = state.turnOrder.filter((id) => !getPlayer(state, id).forfeited);
-  const currentIndex = order.indexOf(currentId);
-  const next = order[(currentIndex + 1) % order.length];
+  const next = nextActiveTurnPlayer(state, currentId);
+  if (!next) {
+    finishRound(state);
+    effects.push({ type: 'results' });
+    return;
+  }
   startTurn(state, next, now);
   effects.push({ type: 'turn', playerId: next });
+}
+
+function firstActiveTurnPlayer(state: GameState): string | undefined {
+  return state.turnOrder.find((id) => !getPlayer(state, id).forfeited);
+}
+
+function nextActiveTurnPlayer(state: GameState, currentId: string): string | undefined {
+  const currentIndex = state.turnOrder.indexOf(currentId);
+  if (currentIndex < 0) return firstActiveTurnPlayer(state);
+  for (let offset = 1; offset <= state.turnOrder.length; offset += 1) {
+    const candidate = state.turnOrder[(currentIndex + offset) % state.turnOrder.length];
+    if (!getPlayer(state, candidate).forfeited) return candidate;
+  }
+  return undefined;
 }
 
 function finishRound(state: GameState): void {
@@ -762,6 +781,10 @@ function finishRound(state: GameState): void {
 
 function forfeitPlayer(state: GameState, player: EnginePlayer, now: number, effects: GameEffect[]): void {
   if (player.forfeited) return;
+  if (state.turn?.playerId === player.id && state.turn.drawnCardId) {
+    state.burn.push(state.turn.drawnCardId);
+    state.turn.drawnCardId = undefined;
+  }
   player.forfeited = true;
   player.connected = false;
   state.burn.push(...player.cards);
@@ -774,6 +797,12 @@ function forfeitPlayer(state: GameState, player: EnginePlayer, now: number, effe
   if (activePlayers(state).length <= 1) {
     finishRound(state);
     effects.push({ type: 'results' });
+  } else if (state.phase === 'initial_peek' && activePlayers(state).every((candidate) => candidate.initialPeekComplete)) {
+    state.phase = 'playing';
+    const first = firstActiveTurnPlayer(state);
+    if (!first) fail('NO_ACTIVE_PLAYER', 'No active player can begin the round.');
+    startTurn(state, first, now);
+    effects.push({ type: 'turn', playerId: first });
   } else if (state.turn?.playerId === player.id) {
     endTurn(state, now, effects);
   }
@@ -792,7 +821,10 @@ function handleTimeout(
     delete state.temporaryReveals[player.id];
     if (activePlayers(state).every((candidate) => candidate.initialPeekComplete)) {
       state.phase = 'playing';
-      startTurn(state, state.turnOrder[0], now);
+      const first = firstActiveTurnPlayer(state);
+      if (!first) fail('NO_ACTIVE_PLAYER', 'No active player can begin the round.');
+      startTurn(state, first, now);
+      effects.push({ type: 'turn', playerId: first });
     }
     return;
   }

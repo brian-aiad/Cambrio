@@ -13,7 +13,7 @@ function choose<T>(values: T[], random: () => number): T {
   return values[Math.floor(random() * values.length)];
 }
 
-function assertCardInvariant(state: GameState) {
+function assertCardInvariant(state: GameState, context = '') {
   const locations = [
     ...state.deck,
     ...state.discard,
@@ -21,6 +21,11 @@ function assertCardInvariant(state: GameState) {
     ...state.players.flatMap((player) => player.cards),
     ...(state.turn?.drawnCardId ? [state.turn.drawnCardId] : []),
   ];
+  if (locations.length !== 52 || new Set(locations).size !== 52) {
+    const missing = Object.keys(state.cards).filter((id) => !locations.includes(id));
+    const duplicates = locations.filter((id, index) => locations.indexOf(id) !== index);
+    throw new Error(`Card conservation failed in ${state.id} v${state.version}${context ? ` (${context})` : ''}: ${locations.length}/52 locations, missing=${missing.join(',') || 'none'}, duplicates=${duplicates.join(',') || 'none'}, phase=${state.phase}, turn=${state.turn?.playerId ?? 'none'}:${state.turn?.stage ?? 'none'}`);
+  }
   expect(locations).toHaveLength(52);
   expect(new Set(locations)).toHaveLength(52);
   expect(Object.keys(state.cards)).toHaveLength(52);
@@ -33,8 +38,13 @@ function assertCardInvariant(state: GameState) {
   }
   if (state.turn) expect(state.players.find((player) => player.id === state.turn?.playerId)?.forfeited).toBe(false);
   if (state.transfer) {
+    expect(state.players.find((player) => player.id === state.transfer?.fromPlayerId)).toMatchObject({ forfeited: false });
     expect(state.players.find((player) => player.id === state.transfer?.fromPlayerId)?.cards.length).toBeGreaterThan(0);
+    expect(state.players.find((player) => player.id === state.transfer?.toPlayerId)).toMatchObject({ forfeited: false });
     expect(state.transfer.fromPlayerId).not.toBe(state.transfer.toPlayerId);
+  }
+  if (state.ending) {
+    expect(state.ending.queue.every((id) => !state.players.find((player) => player.id === id)?.forfeited)).toBe(true);
   }
 }
 
@@ -156,6 +166,74 @@ function simulate(seed: number, playerCount: number): GameState {
   return state;
 }
 
+function simulateDisruptions(seed: number, playerCount: number, observed = new Set<string>()): GameState {
+  const random = seeded(seed * 97);
+  const participants = Array.from({ length: playerCount }, (_, index) => ({ id: `p${index}`, userId: `u${index}`, name: `Player ${index}` }));
+  let state = createGame(`disruption-${seed}`, participants, 1_000, random);
+
+  for (const player of [...state.players]) {
+    if (player.forfeited) continue;
+    const remaining = state.players.filter((candidate) => !candidate.forfeited).length;
+    if (remaining > 2 && random() < 0.22) {
+      observed.add('initial-forfeit');
+      state = applyGameCommand(state, { type: 'FORFEIT_PLAYER', playerId: player.id }, 1_010, random).state;
+    } else if (random() < 0.32) {
+      observed.add('initial-timeout');
+      state = applyGameCommand(state, { type: 'TIMEOUT', playerId: player.id }, 1_011, random).state;
+    } else {
+      state = applyGameCommand(state, { type: 'INITIAL_PEEK_START', playerId: player.id }, 1_012, random).state;
+      state = applyGameCommand(state, { type: 'INITIAL_PEEK_END', playerId: player.id }, 1_013, random).state;
+    }
+    assertCardInvariant(state, `initial player ${player.id}`);
+    assertProjectionInvariant(state);
+  }
+
+  let actions = 0;
+  let previousCommand: GameCommand | undefined;
+  while (state.phase !== 'results' && actions < 1_000) {
+    assertCardInvariant(state, `before disruption action ${actions}; previous=${previousCommand ? JSON.stringify(previousCommand) : 'none'}`);
+    assertProjectionInvariant(state);
+    const active = state.players.filter((player) => !player.forfeited);
+    let command: GameCommand;
+    if (active.length > 2 && random() < 0.055) {
+      observed.add('forfeit');
+      command = { type: 'FORFEIT_PLAYER', playerId: choose(active, random).id };
+    } else if (state.transfer) {
+      const from = state.players.find((player) => player.id === state.transfer?.fromPlayerId)!;
+      if (random() < 0.5) {
+        observed.add('transfer-timeout');
+        command = { type: 'TIMEOUT', playerId: from.id };
+      } else command = { type: 'TRANSFER_CARD', playerId: from.id, cardId: choose(from.cards, random) };
+    } else if (!state.ending && actions > 18 && random() < 0.2) {
+      command = { type: 'CALL_CAMBIO', playerId: choose(active, random).id };
+    } else {
+      const stack = random() < 0.18 ? possibleStack(state, random) : undefined;
+      if (stack) command = stack;
+      else if (random() < 0.14) {
+        observed.add(`${state.turn!.stage}-timeout`);
+        command = { type: 'TIMEOUT', playerId: state.turn!.playerId };
+      }
+      else if (state.turn!.stage === 'power') command = powerCommand(state, random);
+      else if (state.turn!.stage === 'awaiting_draw') command = { type: 'DRAW', playerId: state.turn!.playerId };
+      else {
+        const player = state.players.find((candidate) => candidate.id === state.turn!.playerId)!;
+        command = player.cards.length && random() < 0.5
+          ? { type: 'SWAP_DRAWN', playerId: player.id, targetCardId: choose(player.cards, random) }
+          : { type: 'DISCARD_DRAWN', playerId: player.id };
+      }
+    }
+    state = applyGameCommand(state, command, 2_000 + actions, random).state;
+    previousCommand = command;
+    actions += 1;
+  }
+
+  expect(actions).toBeLessThan(1_000);
+  expect(state.phase).toBe('results');
+  assertCardInvariant(state);
+  assertProjectionInvariant(state);
+  return state;
+}
+
 describe('randomized game stress', () => {
   it('completes 350 deterministic games across every supported room size', () => {
     let completed = 0;
@@ -233,4 +311,10 @@ describe('randomized game stress', () => {
       assertCardInvariant(state);
     }
   }, 20_000);
+
+  it('completes 500 disrupted games with forfeits and every timeout stage', () => {
+    const observed = new Set<string>();
+    for (let seed = 1; seed <= 500; seed += 1) simulateDisruptions(seed, 2 + (seed % 7), observed);
+    expect([...observed]).toEqual(expect.arrayContaining(['initial-forfeit', 'initial-timeout', 'forfeit', 'transfer-timeout', 'awaiting_draw-timeout', 'deciding-timeout', 'power-timeout']));
+  }, 30_000);
 });

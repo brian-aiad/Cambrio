@@ -12,7 +12,7 @@ async (page) => {
   };
 
   const coreScenes = [
-    'initial', 'awaiting', 'drawn', 'own-select', 'own-reveal', 'opponent-select',
+    'initial', 'awaiting', 'opponent-turn', 'drawn', 'own-select', 'own-reveal', 'opponent-select',
     'opponent-reveal', 'blind-own', 'blind-opponent', 'black-own',
     'black-opponent', 'black-reveal', 'transfer', 'ending', 'six', 'zero', 'results',
   ];
@@ -39,6 +39,9 @@ async (page) => {
   await capture('ending', 8, { width: 320, height: 568 }, '', 1_850);
   await capture('ending', 8, { width: 844, height: 390 }, '', 1_850);
   await capture('results', 8, { width: 390, height: 844 });
+  await capture('all-six', 8, { width: 320, height: 568 });
+  await capture('all-six', 8, { width: 390, height: 844 });
+  await capture('all-six', 8, { width: 844, height: 390 });
 
-  return { screenshots: coreScenes.length + 1 + 7 + devices.length * 5 + 5 };
+  return { screenshots: coreScenes.length + 1 + 7 + devices.length * 5 + 8 };
 }

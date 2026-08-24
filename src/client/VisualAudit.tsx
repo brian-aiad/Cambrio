@@ -38,7 +38,7 @@ function CardGallery() {
 }
 
 function makeRoom(scene: string, playerCount: number): RoomView {
-  const players = Array.from({ length: playerCount }, (_, index) => makePlayer(index, scene === 'six' && index === 0 ? 6 : scene === 'zero' && index === 0 ? 0 : 4));
+  const players = Array.from({ length: playerCount }, (_, index) => makePlayer(index, scene === 'all-six' ? 6 : scene === 'six' && index === 0 ? 6 : scene === 'zero' && index === 0 ? 0 : 4));
   const self = players[0];
   const activePlayerId = scene === 'opponent-turn' ? players[1].id : self.id;
   const game: GameView = {
@@ -49,7 +49,7 @@ function makeRoom(scene: string, playerCount: number): RoomView {
     players,
     deckCount: 38,
     discard: faceCard('discard-8', -1, '8', 'diamonds'),
-    stackOpen: scene === 'awaiting' || scene === 'opponent-turn' || scene.startsWith('stack-'),
+    stackOpen: scene === 'awaiting' || scene === 'opponent-turn' || scene === 'all-six' || scene.startsWith('stack-'),
     discardGeneration: 4,
     activePlayerId,
     turnStage: 'awaiting_draw',

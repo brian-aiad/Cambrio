@@ -44,6 +44,26 @@ describe('RoomManager integration', () => {
     expect(restoredManager.view(restored!, guestMembership.playerId).code).toBe(hostMembership.roomCode);
   });
 
+  it('lets the first new player reclaim an empty lobby and start it normally', async () => {
+    const manager = new RoomManager(new MemoryPersistence());
+    const created = await manager.handleRoomAction(host, undefined, roomAction({ type: 'ROOM_CREATE', name: 'Host' }));
+    const code = created.membership!.roomCode;
+    await manager.handleRoomAction(host, created.membership, roomAction({ type: 'ROOM_LEAVE' }));
+
+    const replacementIdentity = { userId: 'replacement-user', anonymous: true } satisfies ServerIdentity;
+    const replacement = await manager.handleRoomAction(replacementIdentity, undefined, roomAction({ type: 'ROOM_JOIN', code, name: 'Replacement' }));
+    let room = (await manager.get(code))!;
+    expect(room.hostPlayerId).toBe(replacement.membership!.playerId);
+    expect(room.players.find((player) => player.id === replacement.membership!.playerId)?.ready).toBe(true);
+
+    const joined = await manager.handleRoomAction(guest, undefined, roomAction({ type: 'ROOM_JOIN', code, name: 'Guest' }));
+    await manager.handleRoomAction(guest, joined.membership, roomAction({ type: 'ROOM_READY', ready: true }));
+    await manager.handleRoomAction(replacementIdentity, replacement.membership, roomAction({ type: 'ROOM_START' }));
+    room = (await manager.get(code))!;
+    expect(room.phase).toBe('game');
+    expect(room.game?.players).toHaveLength(2);
+  });
+
   it('records a completed forfeit result exactly once', async () => {
     const { persistence, manager, hostMembership, guestMembership } = await startedRoom();
     await completePeek(manager, hostMembership);

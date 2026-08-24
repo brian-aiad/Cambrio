@@ -369,7 +369,9 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
   const canRiskStack = self.cards.length > 0 && self.cards.length < MAX_HAND_CARDS;
   const stackReady = game.stackOpen && canRiskStack && !transferring && !selectingPower;
   const stackBlockedByLimit = game.stackOpen && self.cards.length >= MAX_HAND_CARDS && !transferring && !selectingPower;
-  const canCallCambrio = isTurn && game.turnStage === 'awaiting_draw' && !game.ending && !game.transfer && !game.power;
+  // Calling is intentionally table-wide: a player may call while another
+  // player's turn is in progress, and that caller anchors the final rotation.
+  const canCallCambrio = !game.ending;
 
   const attemptStack = async (card: CardView) => {
     if (stackFeedback?.kind === 'trying') return;

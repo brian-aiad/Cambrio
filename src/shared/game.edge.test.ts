@@ -333,3 +333,61 @@ describe('ending edge cases', () => {
     expect(state.results?.every((result) => result.winner)).toBe(true);
   });
 });
+
+describe('forfeit continuity', () => {
+  it('advances from a forfeited middle active seat to the next occupied seat', () => {
+    let state = ready(4);
+    state = drawAndDiscard(state, '2');
+    const removed = state.turn!.playerId;
+    const removedIndex = state.turnOrder.indexOf(removed);
+    const expected = state.turnOrder[(removedIndex + 1) % state.turnOrder.length];
+
+    state = applyGameCommand(state, { type: 'FORFEIT_PLAYER', playerId: removed }, 2_100, random).state;
+
+    expect(state.players.find((player) => player.id === removed)?.forfeited).toBe(true);
+    expect(state.turn?.playerId).toBe(expected);
+  });
+
+  it('burns an active forfeiter\'s undecided draw without losing a card', () => {
+    let state = ready(4);
+    const removed = state.turn!.playerId;
+    state = applyGameCommand(state, { type: 'DRAW', playerId: removed }, 2_100, random).state;
+    const drawn = state.turn!.drawnCardId!;
+
+    state = applyGameCommand(state, { type: 'FORFEIT_PLAYER', playerId: removed }, 2_101, random).state;
+
+    const locations = [...state.deck, ...state.discard, ...state.burn, ...state.players.flatMap((player) => player.cards), ...(state.turn?.drawnCardId ? [state.turn.drawnCardId] : [])];
+    expect(state.burn).toContain(drawn);
+    expect(locations).toHaveLength(52);
+    expect(new Set(locations)).toHaveLength(52);
+  });
+
+  it('never starts a forfeited first seat after the remaining peeks finish', () => {
+    let state = createGame('peek-forfeit', participants, 1_000, random);
+    const removed = state.turnOrder[0];
+    state = applyGameCommand(state, { type: 'FORFEIT_PLAYER', playerId: removed }, 1_001, random).state;
+    for (const player of state.players.filter((candidate) => !candidate.forfeited)) {
+      state = applyGameCommand(state, { type: 'INITIAL_PEEK_START', playerId: player.id }, 1_002, random).state;
+      state = applyGameCommand(state, { type: 'INITIAL_PEEK_END', playerId: player.id }, 1_003, random).state;
+    }
+
+    expect(state.phase).toBe('playing');
+    expect(state.turn?.playerId).toBe(state.turnOrder.find((id) => id !== removed));
+  });
+
+  it('starts immediately when the only unfinished initial peek forfeits', () => {
+    let state = createGame('last-peek-forfeit', participants, 1_000, random);
+    const unfinished = state.players.at(-1)!;
+    for (const player of state.players.filter((candidate) => candidate.id !== unfinished.id)) {
+      state = applyGameCommand(state, { type: 'INITIAL_PEEK_START', playerId: player.id }, 1_001, random).state;
+      state = applyGameCommand(state, { type: 'INITIAL_PEEK_END', playerId: player.id }, 1_002, random).state;
+    }
+    expect(state.phase).toBe('initial_peek');
+
+    const transition = applyGameCommand(state, { type: 'FORFEIT_PLAYER', playerId: unfinished.id }, 1_003, random);
+
+    expect(transition.state.phase).toBe('playing');
+    expect(transition.state.turn?.playerId).toBe(transition.state.turnOrder.find((id) => id !== unfinished.id));
+    expect(transition.effects).toContainEqual(expect.objectContaining({ type: 'turn' }));
+  });
+});

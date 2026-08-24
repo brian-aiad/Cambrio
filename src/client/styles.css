@@ -319,8 +319,18 @@ input { width: 100%; min-height: 48px; border: 1px solid #cbd1e1; border-radius:
   .game-page { height: calc(100dvh - 52px); min-height: 0; grid-template-rows: 43px auto minmax(0, 1fr); gap: 4px; padding: 4px 8px 7px; overflow: hidden; }
   .opponent-rail { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); justify-content: stretch; gap: 4px; overflow: visible; padding: 1px 4px 5px; }
   .player-hand { --card-w: 46px; --card-gap: 3px; }.player-hand.compact { --card-w: 42px; --card-gap: 2px; width: 100%; min-width: 0; }
+  .game-page:has(.opponent-rail .hand-slot:nth-child(5)) .player-hand.compact { --card-w: 32px; }
+  .game-page:has(.opponent-rail .hand-slot:nth-child(5)) .stack-hint { left: auto; right: 150px; top: 2px; bottom: auto; translate: 0; }
+  .game-page:has(.opponent-rail .hand-slot:nth-child(5)) .stack-hint.limit span { display: none; }
+  .game-page:has(.self-zone .hand-slot:nth-child(5)) .self-zone { width: 245px; }
+  .game-page:has(.self-zone .hand-slot:nth-child(5)) .self-zone .player-hand { --card-w: 36px; }
+  .game-page:has(.self-zone .hand-slot:nth-child(5)) .self-zone .hand-cards { grid-template-columns: repeat(6, var(--card-w)); grid-template-rows: calc(var(--card-w) * 1.4); }
+  .game-page:has(.self-zone .hand-slot:nth-child(5)) .self-zone .hand-slot { grid-column: auto !important; grid-row: 1 !important; }
   .seat-name { width: 100%; justify-content: center; font-size: 9px; }
   .table-center { min-height: 0; }.pile .playing-card, .deck-card { width: 57px; }
+  .game-page:has(.drawn-panel) .drawn-panel { right: 142px; gap: 6px; padding: 7px; }
+  .game-page:has(.drawn-panel) .drawn-panel .playing-card { width: 52px; }
+  .game-page:has(.drawn-panel) .drawn-actions { width: 104px; }
   .self-zone { position: absolute; left: 18px; bottom: 7px; width: 220px; align-self: auto; }
   .interaction-prompt { bottom: 12px; }
   .stack-result { top: 48%; }

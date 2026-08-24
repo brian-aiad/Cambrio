@@ -95,10 +95,10 @@ async (page) => {
       await activePage.locator('.drawn-panel').waitFor();
       if (turn % 2 === 0) {
         await activePage.locator('.self-zone .playing-card.interactive').first().click();
-        await page.waitForTimeout(130);
-        const flightCounts = await Promise.all(pages.map((playerPage) => playerPage.locator('.card-flight').count()));
-        const visibleObservers = flightCounts.filter((count) => count === 1).length;
-        if (visibleObservers !== pages.length) throw new Error(`A hand replacement was not animated for every player: ${flightCounts.join(',')}`);
+        await page.waitForTimeout(220);
+        const flightCounts = await Promise.all(pages.map((playerPage) => playerPage.locator('.swap-flight-layer.replace .card-flight').count()));
+        const visibleObservers = flightCounts.filter((count) => count === 2).length;
+        if (visibleObservers !== pages.length) throw new Error(`A two-way hand replacement was not animated for every player: ${flightCounts.join(',')}`);
         observedSwapFlights += visibleObservers;
       } else {
         await activePage.getByRole('button', { name: 'Discard', exact: true }).click();

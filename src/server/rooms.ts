@@ -379,6 +379,10 @@ export class RoomManager {
     const player = await this.makePlayer(identity, name, Date.now());
     const waiting = room.phase !== 'lobby' || room.players.length >= 8;
     (waiting ? room.waiting : room.players).push(player);
+    if (!waiting && !room.players.some((candidate) => candidate.id === room.hostPlayerId)) {
+      room.hostPlayerId = player.id;
+      player.ready = true;
+    }
     await this.save(room);
     return {
       membership: { roomCode: room.code, playerId: player.id, waiting },
