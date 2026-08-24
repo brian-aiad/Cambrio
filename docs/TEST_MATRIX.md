@@ -23,6 +23,7 @@ This matrix records the release checks for the server-authoritative rules and th
 - 25 simultaneous duplicate draws coalesced to one mutation with consistent acknowledgements; 25 unique discard taps accepted exactly once; 20 duplicate Cambrio calls started one ending sequence.
 - 96 live Socket.IO clients in 12 simultaneous full rooms for the normal smoke.
 - 400 live Socket.IO clients in 50 simultaneous full rooms for the release load pass.
+- Live transport interruption and recovery with the same player ID, exactly one restored seat, and preserved normalized name.
 
 ## Eight-player layout audit
 
@@ -30,19 +31,22 @@ Seven opponent grids and the local grid were checked at these viewport sizes:
 
 | Viewport | Result |
 | --- | --- |
-| 414×896, 390×844 | All opponents visible; a six-card local hand keeps TL/TR/BL/BR and extends +1/+2 as a right column; no scroll or overlap. |
-| 375×812, 360×800 | All opponents visible, no horizontal overflow or overlap. |
-| 320×568 | All opponents visible; intentional vertical page scroll preserves cards instead of overlapping or reflowing them. |
+| 414×896, 390×844 | All opponents visible in one seat-ordered rail; a six-card local hand keeps TL/TR/BL/BR and stable +1/+2 positions; no overlap. |
+| 375×812, 360×800 | All opponents visible, no horizontal overflow or card reordering. |
+| 320×568 | Compact decision, stack, and power states preserve all controls without overlapping the discard, deck, or local cards. |
 | 667×375, 844×390, 932×430 landscape | All seven opponents stay in fixed positions; the local hand docks left of the piles, with no page scroll or board overlap. |
 | 1440×900 desktop | All seven opponent grids visible in one row with the full table and local hand. |
 
-The active eight-player game passes Lighthouse snapshot audits at 100 for Accessibility, Best Practices, SEO, and Agentic Browsing, with zero failed checks.
+The production landing page scores 100 for Accessibility, Best Practices, and SEO in the throttled Lighthouse mobile profile, with zero cumulative layout shift. Performance is 82 with zero total blocking time; the remaining score cost is initial JavaScript transfer for realtime, auth, and motion support.
+
+The deterministic Playwright harness captures 46 state/device combinations: every power phase, draw and stack decisions, transfer and ending states, results, zero/six-card hands, all player counts from 2–8, four viewport classes, and a gallery of all 52 card faces. Focused browser assertions additionally verify automatic peek concealment, exact-slot blind and Black King movement, correct/wrong stack feedback, stable penalty placement, and mutually exclusive decision surfaces.
 
 ## Release commands
 
 ```bash
 npm run check
 npm run smoke:runtime
+npm run smoke:reconnect
 npm run stress:socket
 npm run stress:actions
 ```

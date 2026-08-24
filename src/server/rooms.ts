@@ -10,7 +10,7 @@ import {
   type GameState,
 } from '../shared/game.js';
 import type { GameAction, RoomAction, RoomPlayerView, RoomView } from '../shared/protocol.js';
-import { toGameCommand } from '../shared/protocol.js';
+import { normalizeDisplayName, toGameCommand } from '../shared/protocol.js';
 import type { ServerIdentity } from './auth.js';
 import type { Persistence, StoredStats } from './persistence.js';
 
@@ -241,7 +241,9 @@ export class RoomManager {
         const previousHostId = room.hostPlayerId;
         this.transferHost(room);
         if (room.hostPlayerId !== previousHostId) {
-          delete room.disconnectGrace[host.id];
+          // Keep the expired deadline until any active turn owned by the old
+          // host is auto-played below. Deleting it here gives that turn a fresh
+          // grace period and makes timeout behavior depend on seat order.
           await this.save(room);
           changed.push(room.code);
         }
@@ -280,6 +282,8 @@ export class RoomManager {
     if (memory) return memory;
     const restored = await this.persistence.loadRoom<RoomRuntime>(normalized);
     if (restored) {
+      for (const player of [...restored.players, ...restored.waiting]) player.name = normalizeDisplayName(player.name);
+      for (const player of restored.game?.players ?? []) player.name = normalizeDisplayName(player.name);
       this.rooms.set(normalized, restored);
       return restored;
     }

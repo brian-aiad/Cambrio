@@ -1,11 +1,12 @@
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, LayoutGroup, motion } from 'framer-motion';
 import { ArrowRight, Check, Copy, Link2, UserRound, Volume2, VolumeX, Waves, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { nanoid } from 'nanoid';
 import { MAX_HAND_CARDS, type CardView, type GameView, type PlayerView, type PowerKind } from '../shared/game.js';
 import type { ActionAck, GameAction, RoomAction, RoomPlayerView, RoomView, ServerNotice } from '../shared/protocol.js';
-import { ensureClientSession, supabase, type ClientSession } from './auth.js';
+import { ensureClientSession, getSupabase, type ClientSession } from './auth.js';
 import { useGameAudio } from './audio.js';
 
 const serverUrl = (import.meta.env.VITE_SERVER_URL as string | undefined) || window.location.origin;
@@ -202,26 +203,72 @@ function LobbyPlayer({ player, self, canRemove, remove }: { player: RoomPlayerVi
   return <div className={`lobby-player ${!player.connected ? 'offline' : ''}`}><div className="avatar">{initials}</div><div className="player-info"><strong>{player.name}{self ? ' (you)' : ''}</strong><span>{player.handle ? <a href={`/u/${player.handle}`}>@{player.handle}</a> : 'Guest player'} · {player.stats?.wins ?? 0} wins</span></div>{player.isHost ? <span className="host-badge">HOST</span> : <span className={`ready-dot ${player.ready ? 'yes' : ''}`}>{player.ready ? 'READY' : 'WAITING'}</span>}{canRemove && <button className="remove-player" onClick={remove} aria-label={`Remove ${player.name}`}><X size={15} /></button>}</div>;
 }
 
-function GameTable({ room, send, sendRoom }: { room: RoomView; send: (action: GameActionInput) => Promise<ActionAck>; sendRoom: (action: RoomActionInput) => Promise<ActionAck> }) {
+export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (action: GameActionInput) => Promise<ActionAck>; sendRoom: (action: RoomActionInput) => Promise<ActionAck> }) {
   const game = room.game!;
   const self = game.players.find((player) => player.id === room.selfPlayerId)!;
-  const [revealHeld, setRevealHeld] = useState(false);
+  const [revealVisible, setRevealVisible] = useState(false);
   const [inspectedKing, setInspectedKing] = useState(false);
   const [stackFeedback, setStackFeedback] = useState<{ cardId: string; kind: StackFeedback }>();
+  const [tableCue, setTableCue] = useState<TableCue>();
   const feedbackTimer = useRef<number | undefined>(undefined);
+  const cueTimer = useRef<number | undefined>(undefined);
+  const sendRef = useRef(send);
+  const motionSnapshot = useRef<TableSnapshot | undefined>(undefined);
 
-  useEffect(() => () => window.clearTimeout(feedbackTimer.current), []);
-  useEffect(() => { setRevealHeld(false); setInspectedKing(false); }, [game.power?.status, game.version]);
+  useEffect(() => () => { window.clearTimeout(feedbackTimer.current); window.clearTimeout(cueTimer.current); }, []);
+  useEffect(() => { sendRef.current = send; }, [send]);
   useEffect(() => {
-    const conceal = () => {
-      if (!revealHeld || game.power?.status !== 'revealing') return;
-      setRevealHeld(false);
-      if (game.power.kind === 'black_king') setInspectedKing(true);
-      else void send({ type: 'POWER_COMPLETE' });
+    const current = snapshotTable(game);
+    const previous = motionSnapshot.current;
+    motionSnapshot.current = current;
+    if (!previous) return;
+    const moved = [...current.locations.entries()].filter(([cardId, location]) => {
+      const before = previous.locations.get(cardId);
+      return before && before.playerId !== location.playerId;
+    });
+    let cue: TableCue | undefined;
+    if (moved.length >= 2) {
+      const [cardId, destination] = moved[0];
+      const source = previous.locations.get(cardId)!;
+      cue = { kind: 'exchange', title: previous.powerKind === 'black_king' ? 'Black King swap' : 'Blind swap', from: `${source.playerName} ${slotTag(source.slot)}`, to: `${destination.playerName} ${slotTag(destination.slot)}` };
+    } else if (moved.length === 1) {
+      const [cardId, destination] = moved[0];
+      const source = previous.locations.get(cardId)!;
+      cue = { kind: 'transfer', title: 'Card transfer', from: `${source.playerName} ${slotTag(source.slot)}`, to: `${destination.playerName} ${slotTag(destination.slot)}` };
+    } else if (!previous.stackOpen && current.discardId && current.discardId !== previous.discardId) {
+      const source = previous.locations.get(current.discardId);
+      if (source) cue = { kind: 'discard', title: previous.stackOpen ? 'Card stacked' : 'Card swapped', from: `${source.playerName} ${slotTag(source.slot)}`, to: 'Discard' };
+    }
+    if (!cue) return;
+    setTableCue(cue);
+    window.clearTimeout(cueTimer.current);
+    cueTimer.current = window.setTimeout(() => setTableCue(undefined), 1_650);
+  // A new authoritative game version is the animation trigger.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game.version]);
+  const revealKey = game.power?.status === 'revealing' ? `${game.power.kind}:${game.power.targets.join(':')}` : '';
+  useEffect(() => {
+    if (!revealKey || game.power?.status !== 'revealing') {
+      setRevealVisible(false);
+      setInspectedKing(false);
+      return;
+    }
+    let finished = false;
+    setRevealVisible(true);
+    setInspectedKing(false);
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      setRevealVisible(false);
+      if (game.power?.kind === 'black_king') setInspectedKing(true);
+      else void sendRef.current({ type: 'POWER_COMPLETE' });
     };
-    window.addEventListener('blur', conceal);
-    return () => window.removeEventListener('blur', conceal);
-  }, [game.power, revealHeld, send]);
+    const timer = window.setTimeout(finish, 1_700);
+    window.addEventListener('blur', finish);
+    return () => { window.clearTimeout(timer); window.removeEventListener('blur', finish); };
+  // revealKey represents a new server-approved private reveal.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealKey]);
 
   if (game.phase === 'initial_peek') return <InitialPeek game={game} self={self} send={send} />;
   if (game.phase === 'results') return <Results room={room} game={game} sendRoom={sendRoom} />;
@@ -235,6 +282,7 @@ function GameTable({ room, send, sendRoom }: { room: RoomView; send: (action: Ga
   const canRiskStack = self.cards.length > 0 && self.cards.length < MAX_HAND_CARDS;
   const stackReady = game.stackOpen && canRiskStack && !transferring && !selectingPower;
   const stackBlockedByLimit = game.stackOpen && self.cards.length >= MAX_HAND_CARDS && !transferring && !selectingPower;
+  const endingPlayer = game.ending ? game.players.find((player) => player.id === game.ending?.triggerPlayerId) : undefined;
 
   const attemptStack = async (card: CardView) => {
     if (stackFeedback?.kind === 'trying') return;
@@ -265,29 +313,32 @@ function GameTable({ room, send, sendRoom }: { room: RoomView; send: (action: Ga
   };
 
   return (
+    <LayoutGroup id={`table-${game.id}`}>
     <motion.main className={`game-page ${stackReady ? 'stack-mode' : ''}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <div className="game-status"><span className="room-pill">{room.code}</span><TurnBanner game={game} self={self} /><Countdown deadline={game.deadlineAt} /></div>
-      {game.ending && <div className="ending-banner"><strong>{game.ending.reason === 'cambio' ? 'CAMBRIO CALLED' : 'ZERO CARDS'}</strong><span>{game.ending.turnsRemaining === 0 ? 'Final turn' : `${game.ending.turnsRemaining} ${game.ending.turnsRemaining === 1 ? 'turn' : 'turns'} after this one`}</span></div>}
+      <div className="game-status"><span className="room-pill" data-short={room.code.slice(0, 2)}>{room.code}</span><TurnBanner game={game} self={self} /><Countdown deadline={game.deadlineAt} /></div>
+      {game.ending && <div className="ending-banner"><strong>{game.ending.reason === 'cambio' ? 'CAMBRIO CALLED' : 'ZERO CARDS'}</strong><span>{endingPlayer?.name ? `${endingPlayer.name} · ` : ''}{game.ending.turnsRemaining === 0 ? 'Final turn' : `${game.ending.turnsRemaining} ${game.ending.turnsRemaining === 1 ? 'turn' : 'turns'} after this one`}</span></div>}
 
-      <section className="opponent-rail" aria-label="Other players">
-        {opponents.map((opponent) => <PlayerHand key={opponent.id} player={opponent} compact canInteract={() => canInteract(opponent)} highlight={() => isContextTarget(opponent)} selectedCards={power?.targets} feedback={stackFeedback} reveal={revealHeld} onCard={(card) => actionCard(card, opponent)} active={game.activePlayerId === opponent.id} />)}
+      <section className="opponent-rail" aria-label="Other players" style={{ '--opponent-count': Math.max(1, opponents.length) } as CSSProperties}>
+        {opponents.map((opponent) => <PlayerHand key={opponent.id} player={opponent} compact canInteract={() => canInteract(opponent)} highlight={() => isContextTarget(opponent)} selectedCards={power?.targets} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, opponent)} active={game.activePlayerId === opponent.id} />)}
       </section>
 
       <section className="table-center">
         <div className="pile-zone">
-          <div className="pile"><Card card={game.discard} faceDown={!game.discard} label={game.discard ? 'Discard' : 'Empty'} /><span>DISCARD</span></div>
-          <button className={`deck-card ${isTurn && game.turnStage === 'awaiting_draw' ? 'draw-ready' : ''}`} disabled={!isTurn || game.turnStage !== 'awaiting_draw' || Boolean(game.transfer)} onClick={() => { vibrate(10); void send({ type: 'DRAW' }); }} title={`Draw from deck; ${game.deckCount} cards remain`}><span className="card-back-pattern"><CambrioGlyph /></span><small>{game.deckCount}</small></button>
+          <div className="pile"><Card card={game.discard} faceDown={!game.discard} /><span>{game.discard ? 'DISCARD' : 'EMPTY'}</span></div>
+          <button className={`deck-card ${isTurn && game.turnStage === 'awaiting_draw' ? 'draw-ready' : ''}`} disabled={!isTurn || game.turnStage !== 'awaiting_draw' || Boolean(game.transfer)} onClick={() => { vibrate(10); void send({ type: 'DRAW' }); }} title={`Draw from deck; ${game.deckCount} cards remain`}><CardBackMark /><small>{game.deckCount}</small></button>
         </div>
-        <AnimatePresence>{game.drawnCard && <motion.div className="drawn-panel" initial={{ opacity: 0, x: 34, scale: .94 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={{ opacity: 0, x: -20, scale: .97 }} transition={{ type: 'spring', stiffness: 270, damping: 27 }}><span>DRAWN CARD</span><Card card={game.drawnCard} /><div className="drawn-actions"><button className="primary discard-drawn" onClick={() => { vibrate(12); void send({ type: 'DISCARD_DRAWN' }); }}><GameGlyph kind="discard" />Discard drawn card</button>{self.cards.length > 0 && <small>or tap one of your slots to swap</small>}</div></motion.div>}</AnimatePresence>
-        {stackReady && <motion.div className="stack-hint" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}><GameGlyph kind={canSwapDrawn ? 'swap' : 'stack'} /><strong>{canSwapDrawn ? 'CHOOSE' : 'STACK OPEN'}</strong><span>{canSwapDrawn ? 'Your slot swaps · opponent slot stacks' : 'Tap any remembered matching card'}</span></motion.div>}
-        {stackBlockedByLimit && <motion.div className="stack-hint limit" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}><GameGlyph kind="stack" /><strong>6-CARD LIMIT</strong><span>Reduce your hand before stacking again</span></motion.div>}
+        <AnimatePresence mode="wait">
+          {game.drawnCard ? <motion.div key="drawn" className="drawn-panel" initial={{ opacity: 0, x: 34, scale: .94 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={{ opacity: 0, x: -18, scale: .97 }} transition={{ duration: .2, ease: [0.22, 1, 0.36, 1] }}><span>DRAWN</span><Card card={game.drawnCard} /><div className="drawn-actions"><button className="primary discard-drawn" onClick={() => { vibrate(12); void send({ type: 'DISCARD_DRAWN' }); }}><GameGlyph kind="discard" />Discard</button>{self.cards.length > 0 && <small>or tap a glowing slot to keep it</small>}</div></motion.div> : stackReady ? <motion.div key="stack-open" className="stack-hint" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .1 }}><GameGlyph kind="stack" /><strong>STACK OPEN</strong><span>Tap any remembered matching card</span></motion.div> : stackBlockedByLimit ? <motion.div key="stack-limit" className="stack-hint limit" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .1 }}><GameGlyph kind="stack" /><strong>6-CARD LIMIT</strong><span>Reduce your hand before stacking again</span></motion.div> : null}
+        </AnimatePresence>
       </section>
 
-      <section className="self-zone"><PlayerHand player={self} canInteract={() => canInteract(self)} highlight={() => isContextTarget(self)} selectedCards={power?.targets} feedback={stackFeedback} reveal={revealHeld} onCard={(card) => actionCard(card, self)} active={isTurn} /><span className="you-label">YOU · {self.cards.length ? `${self.cards.length}/${MAX_HAND_CARDS} CARDS` : 'OUT'}</span></section>
+      <section className="self-zone"><PlayerHand player={self} canInteract={() => canInteract(self)} highlight={() => isContextTarget(self)} selectedCards={power?.targets} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, self)} active={isTurn} /><span className="you-label">YOU · {self.cards.length ? `${self.cards.length}/${MAX_HAND_CARDS} CARDS` : 'OUT'}</span></section>
       <div className="game-actions">{!game.ending && <button className="cambio-button" onClick={() => { vibrate(24); void send({ type: 'CALL_CAMBIO' }); }}><GameGlyph kind="cambio" />Call Cambrio</button>}</div>
       <AnimatePresence>{stackFeedback && stackFeedback.kind !== 'trying' && <motion.div className={`stack-result ${stackFeedback.kind}`} initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, y: -8 }}>{stackFeedback.kind === 'correct' ? 'MATCH — STACKED' : stackFeedback.kind === 'wrong' ? 'NO MATCH — PENALTY CARD' : 'STACK ALREADY TAKEN'}</motion.div>}</AnimatePresence>
-      <InteractionOverlay game={game} self={self} revealHeld={revealHeld} inspectedKing={inspectedKing} setRevealHeld={setRevealHeld} setInspectedKing={setInspectedKing} send={send} />
+      <AnimatePresence>{tableCue && <TableActionCue cue={tableCue} />}</AnimatePresence>
+      <InteractionOverlay game={game} self={self} revealVisible={revealVisible} inspectedKing={inspectedKing} send={send} />
     </motion.main>
+    </LayoutGroup>
   );
 }
 
@@ -321,19 +372,14 @@ function InitialPeek({ game, self, send }: { game: GameView; self: PlayerView; s
   );
 }
 
-function InteractionOverlay({ game, self, revealHeld, inspectedKing, setRevealHeld, setInspectedKing, send }: { game: GameView; self: PlayerView; revealHeld: boolean; inspectedKing: boolean; setRevealHeld: (value: boolean) => void; setInspectedKing: (value: boolean) => void; send: (action: GameActionInput) => Promise<ActionAck> }) {
+function InteractionOverlay({ game, self, revealVisible, inspectedKing, send }: { game: GameView; self: PlayerView; revealVisible: boolean; inspectedKing: boolean; send: (action: GameActionInput) => Promise<ActionAck> }) {
   if (game.transfer?.fromPlayerId === self.id) return <div className="interaction-prompt"><span className="ability-chip"><GameGlyph kind="gift" />STACK REWARD</span><strong>Tap one of your cards to give away</strong></div>;
   const power = game.power;
   if (!power || game.activePlayerId !== self.id) return null;
   if (power.status === 'offered') return <div className="interaction-prompt"><span className="ability-chip"><GameGlyph kind={powerGlyph(power.kind)} />{powerName(power.kind)}</span><strong>{powerDescription(power.kind)}</strong><button className="text-button" onClick={() => void send({ type: 'POWER_DECLINE' })}>Skip ability</button></div>;
   if (power.status === 'selecting') return <div className="interaction-prompt"><span className="ability-chip"><GameGlyph kind={powerGlyph(power.kind)} />{powerName(power.kind)}</span><strong>{powerTargetInstruction(power.kind, power.targets.length, self.cards.length)}</strong><button className="text-button" onClick={() => void send({ type: 'POWER_DECLINE' })}>Skip ability</button></div>;
   const blackKing = power.kind === 'black_king';
-  const release = () => {
-    setRevealHeld(false);
-    if (blackKing) setInspectedKing(true);
-    else void send({ type: 'POWER_COMPLETE' });
-  };
-  return <div className="interaction-prompt power-prompt"><span className="ability-chip"><GameGlyph kind={powerGlyph(power.kind)} />{blackKing ? 'BLACK KING' : powerName(power.kind)}</span>{!inspectedKing ? <button className="hold-reveal" onPointerDown={() => setRevealHeld(true)} onPointerUp={release} onPointerCancel={release} onPointerLeave={() => revealHeld && release()}><GameGlyph kind="peek" />Hold to view {blackKing ? 'both cards' : 'card'}</button> : <div className="power-choice"><button className="primary" disabled={power.targets.length < 2} onClick={() => void send({ type: 'POWER_COMPLETE', swap: true })}><GameGlyph kind="swap" />Swap cards</button><button onClick={() => void send({ type: 'POWER_COMPLETE', swap: false })}>Keep positions</button></div>}</div>;
+  return <div className={`interaction-prompt power-prompt ${revealVisible ? 'is-revealing' : ''}`}><span className="ability-chip"><GameGlyph kind={powerGlyph(power.kind)} />{blackKing ? 'BLACK KING' : powerName(power.kind)}</span>{!inspectedKing ? <div className="reveal-status"><GameGlyph kind="peek" /><strong>Memorize {blackKing ? 'both cards' : 'this card'}</strong><span className="reveal-progress" /></div> : <div className="power-choice"><strong>Swap positions?</strong><button className="primary" disabled={power.targets.length < 2} onClick={() => void send({ type: 'POWER_COMPLETE', swap: true })}><GameGlyph kind="swap" />Swap</button><button onClick={() => void send({ type: 'POWER_COMPLETE', swap: false })}>Keep</button></div>}</div>;
 }
 
 function Results({ room, game, sendRoom }: { room: RoomView; game: GameView; sendRoom: (action: RoomActionInput) => Promise<ActionAck> }) {
@@ -344,10 +390,28 @@ function Results({ room, game, sendRoom }: { room: RoomView; game: GameView; sen
 }
 
 type StackFeedback = 'trying' | 'correct' | 'wrong' | 'closed';
+type TableCue = { kind: 'exchange' | 'transfer' | 'discard'; title: string; from: string; to: string };
+type TableSnapshot = { locations: Map<string, { playerId: string; playerName: string; slot: number }>; discardId?: string; powerKind?: PowerKind; stackOpen: boolean };
+
+function snapshotTable(game: GameView): TableSnapshot {
+  return {
+    locations: new Map(game.players.flatMap((player) => player.cards.map((card) => [card.id, { playerId: player.id, playerName: player.name, slot: card.slot }] as const))),
+    discardId: game.discard?.id,
+    powerKind: game.power?.kind,
+    stackOpen: game.stackOpen,
+  };
+}
+
+function TableActionCue({ cue }: { cue: TableCue }) {
+  return <motion.div className={`table-action-cue ${cue.kind}`} initial={{ opacity: 0, y: 10, scale: .94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8 }}>
+    <span className="cue-cards" aria-hidden="true"><i /><i /></span>
+    <span><strong>{cue.title}</strong><small>{cue.from} <b>{cue.kind === 'exchange' ? '↔' : '→'}</b> {cue.to}</small></span>
+  </motion.div>;
+}
 
 function PlayerHand({ player, compact = false, canInteract, highlight, selectedCards = [], feedback, reveal = false, active = false, onCard }: { player: PlayerView; compact?: boolean; canInteract?: (card: CardView) => boolean; highlight?: (card: CardView) => boolean; selectedCards?: string[]; feedback?: { cardId: string; kind: StackFeedback }; reveal?: boolean; active?: boolean; onCard: (card: CardView) => void }) {
   const highestSlot = player.cards.reduce((highest, card) => Math.max(highest, card.slot), 3);
-  const slotCount = Math.max(4, Math.ceil((highestSlot + 1) / 2) * 2);
+  const slotCount = Math.max(4, highestSlot + 1);
   const cardsBySlot = new Map(player.cards.map((card) => [card.slot, card]));
   return <div className={`player-hand ${compact ? 'compact' : ''} ${active ? 'active-turn' : ''}`}>
     <div className="seat-name"><span>{player.name}</span>{!player.connected && <i>OFFLINE</i>}</div>
@@ -361,13 +425,15 @@ function PlayerHand({ player, compact = false, canInteract, highlight, selectedC
   </div>;
 }
 
-function Card({ card, faceDown = false, interactive = false, mini = false, positioned = false, targetOption = false, selected = false, feedback, slot, label, onClick }: { card?: CardView; faceDown?: boolean; interactive?: boolean; mini?: boolean; positioned?: boolean; targetOption?: boolean; selected?: boolean; feedback?: StackFeedback; slot?: number; label?: string; onClick?: () => void }) {
+export function Card({ card, faceDown = false, interactive = false, mini = false, positioned = false, targetOption = false, selected = false, feedback, slot, label, onClick }: { card?: CardView; faceDown?: boolean; interactive?: boolean; mini?: boolean; positioned?: boolean; targetOption?: boolean; selected?: boolean; feedback?: StackFeedback; slot?: number; label?: string; onClick?: () => void }) {
   const hidden = faceDown || !card?.rank;
   const red = card?.suit === 'hearts' || card?.suit === 'diamonds';
   const actualSlot = slot ?? card?.slot;
   const description = !card ? 'Empty discard pile' : hidden ? `${actualSlot === undefined || actualSlot < 0 ? 'Hidden' : slotName(actualSlot)} card${interactive ? '; tap to select' : ''}` : `${card.rank} of ${card.suit}${interactive ? '; tap to select' : ''}`;
-  return <motion.button layout="position" layoutId={card ? `card-${card.id}` : undefined} initial={{ opacity: 0, y: hidden ? -8 : 0, scale: .96 }} title={description} className={`playing-card ${hidden ? 'face-down' : ''} ${red ? 'red' : ''} ${interactive ? 'interactive' : ''} ${targetOption ? 'target-option' : ''} ${mini ? 'mini' : ''} ${positioned ? 'positioned' : ''} ${selected ? 'selected' : ''} ${feedback ? `stack-${feedback}` : ''} ${!card ? 'empty' : ''}`} disabled={!interactive} onClick={onClick} animate={feedback === 'wrong' ? { opacity: 1, y: 0, x: [0, -7, 7, -5, 5, 0], rotate: [0, -1.4, 1.4, -.8, .8, 0] } : feedback === 'correct' ? { opacity: 1, y: 0, scale: [1, 1.08, 1] } : { opacity: 1, y: 0, scale: 1 }} transition={feedback ? { duration: .38, ease: 'easeOut' } : { type: 'spring', stiffness: 285, damping: 29, mass: .78 }} whileHover={interactive ? { y: -3 } : undefined} whileTap={interactive ? { scale: .96 } : undefined}>
-    {hidden ? <span className="card-back-pattern"><CambrioGlyph /></span> : <><span className="corner">{card!.rank}<small>{suitGlyph(card!.suit)}</small></span><span className="suit">{suitGlyph(card!.suit)}</span></>}
+  return <motion.button data-card-id={card?.id} data-slot={actualSlot} layout="position" layoutId={card ? `card-${card.id}` : undefined} initial={{ opacity: 0, y: hidden ? -8 : 0, scale: .96 }} title={description} aria-label={description} className={`playing-card ${hidden ? 'face-down' : ''} ${red ? 'red' : ''} ${interactive ? 'interactive' : ''} ${targetOption ? 'target-option' : ''} ${mini ? 'mini' : ''} ${positioned ? 'positioned' : ''} ${selected ? 'selected' : ''} ${feedback ? `stack-${feedback}` : ''} ${!card ? 'empty' : ''}`} disabled={!interactive} onClick={onClick} animate={feedback === 'wrong' ? { opacity: 1, y: 0, x: [0, -7, 7, -5, 5, 0], rotate: [0, -1.4, 1.4, -.8, .8, 0] } : feedback === 'correct' ? { opacity: 1, y: 0, scale: [1, 1.08, 1] } : { opacity: 1, y: 0, scale: 1 }} transition={feedback ? { duration: .38, ease: 'easeOut' } : { layout: { type: 'spring', stiffness: 190, damping: 23, mass: .9 }, opacity: { duration: .16 } }} whileHover={interactive ? { y: -3 } : undefined} whileTap={interactive ? { scale: .96 } : undefined}>
+    <AnimatePresence initial={false} mode="popLayout">
+      {hidden ? <motion.span key="back" className="card-surface card-reverse" initial={{ opacity: 0, rotateY: -88 }} animate={{ opacity: 1, rotateY: 0 }} exit={{ opacity: 0, rotateY: 88 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><CardBackMark /></motion.span> : <motion.span key="front" className="card-surface card-front" initial={{ opacity: 0, rotateY: 88 }} animate={{ opacity: 1, rotateY: 0 }} exit={{ opacity: 0, rotateY: -88 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><span className="corner">{card!.rank}<small>{suitGlyph(card!.suit)}</small></span><span className="suit">{suitGlyph(card!.suit)}</span></motion.span>}
+    </AnimatePresence>
     {positioned && actualSlot !== undefined && <span className="slot-tag">{slotTag(actualSlot)}</span>}
     {label && <em>{label}</em>}
   </motion.button>;
@@ -392,8 +458,8 @@ function AccountPanel({ session, close, force = false, onSaved }: { session: Cli
   const [message, setMessage] = useState('');
   const permanent = !session.anonymous;
   const authHeaders = { 'Content-Type': 'application/json', ...(session.token ? { Authorization: `Bearer ${session.token}` } : {}), 'x-visitor-id': session.visitorId };
-  const google = async () => { if (!supabase) return setMessage('Connect Supabase to enable accounts.'); const { error } = session.anonymous ? await supabase.auth.linkIdentity({ provider: 'google', options: { redirectTo: window.location.href } }) : await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.href } }); if (error) setMessage(error.message); };
-  const emailLink = async () => { if (!supabase) return setMessage('Connect Supabase to enable accounts.'); const { error } = session.anonymous ? await supabase.auth.updateUser({ email }) : await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } }); setMessage(error ? error.message : 'Check your email to finish linking your account.'); };
+  const google = async () => { const supabase = await getSupabase(); if (!supabase) return setMessage('Connect Supabase to enable accounts.'); const { error } = session.anonymous ? await supabase.auth.linkIdentity({ provider: 'google', options: { redirectTo: window.location.href } }) : await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.href } }); if (error) setMessage(error.message); };
+  const emailLink = async () => { const supabase = await getSupabase(); if (!supabase) return setMessage('Connect Supabase to enable accounts.'); const { error } = session.anonymous ? await supabase.auth.updateUser({ email }) : await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } }); setMessage(error ? error.message : 'Check your email to finish linking your account.'); };
   const saveProfile = async () => { const response = await fetch('/api/me/profile', { method: 'PUT', headers: authHeaders, body: JSON.stringify({ handle, displayName }) }); const body = await response.json(); setMessage(response.ok ? 'Profile saved.' : body.error); if (response.ok) onSaved?.(); };
   return <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={() => !force && close()}><motion.section className="account-panel glass" initial={{ y: 18 }} animate={{ y: 0 }} onMouseDown={(event) => event.stopPropagation()}>{!force && <button className="modal-close" onClick={close}>×</button>}<p className="eyebrow">Player identity</p><h2>{permanent ? force ? 'Choose your player handle' : 'Your Cambrio profile' : 'Save your wins'}</h2>{!permanent ? <><p>Keep playing as a guest, or link this guest to an account. Wins already earned on this browser will come with you.</p><button className="google-button" onClick={() => void google()}>Continue with Google</button><div className="or"><span>or use email</span></div><div className="email-row"><input name="email" autoComplete="email" value={email} type="email" placeholder="you@example.com" onChange={(event) => setEmail(event.target.value)} /><button onClick={() => void emailLink()}>Send link</button></div></> : <><p>Your unique handle creates your shareable public profile.</p><label>Public handle<input name="handle" autoComplete="username" value={handle} onChange={(event) => setHandle(event.target.value.toLowerCase())} placeholder="card_shark" /></label><label>Display name<input name="displayName" autoComplete="name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label><button className="primary wide" disabled={handle.length < 3 || displayName.trim().length < 2} onClick={() => void saveProfile()}>Save public profile</button></>}{message && <p className="panel-message">{message}</p>}</motion.section></motion.div>;
 }
@@ -411,12 +477,16 @@ function FatalScreen({ message }: { message: string }) { return <main className=
 
 type GameGlyphKind = 'cambio' | 'discard' | 'gift' | 'peek' | 'stack' | 'swap';
 
-function CambrioGlyph({ decorative = false, compact = false }: { decorative?: boolean; compact?: boolean }) {
+export function CambrioGlyph({ decorative = false, compact = false }: { decorative?: boolean; compact?: boolean }) {
   return <svg className={compact ? 'game-glyph' : 'cambrio-glyph'} viewBox="0 0 24 24" fill="none" role={decorative ? undefined : 'img'} aria-hidden={decorative || undefined} aria-label={decorative ? undefined : 'Cambrio card'}>
-    <path d="M17.4 7.1A7 7 0 1 0 17.2 17" />
-    <path d="m13.5 16.8 3.8.2.2-3.8" />
-    <path d="M8.1 8.2h4.8" />
+    <rect x="4" y="6" width="9" height="12" rx="2" />
+    <rect x="11" y="3" width="9" height="12" rx="2" />
+    <path d="m6.5 10 2-2 2 2M17.5 11l-2 2-2-2" />
   </svg>;
+}
+
+function CardBackMark() {
+  return <span className="card-back-mark" aria-hidden="true"><CambrioGlyph decorative /></span>;
 }
 
 function GameGlyph({ kind }: { kind: GameGlyphKind }) {

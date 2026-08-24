@@ -6,4 +6,6 @@ coverage/
 *.log
 .DS_Store
 .vite/
+output/
 
+.vercel

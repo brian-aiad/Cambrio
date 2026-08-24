@@ -14,16 +14,17 @@ import { createPersistence } from './persistence.js';
 import { RoomManager, type Membership } from './rooms.js';
 
 const port = Number(process.env.PORT ?? 3001);
-const clientOrigin = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
 const production = process.env.NODE_ENV === 'production';
+const clientOrigin = process.env.CLIENT_ORIGIN || (production ? undefined : 'http://localhost:5173');
 const supabaseOrigin = safeOrigin(process.env.SUPABASE_URL);
 const persistence = createPersistence();
 const auth = new AuthService(persistence);
 const rooms = new RoomManager(persistence);
 const app = express();
 const server = createServer(app);
+const corsOptions = clientOrigin ? { origin: clientOrigin, credentials: true } : undefined;
 const io = new Server<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>(server, {
-  cors: { origin: clientOrigin, credentials: true },
+  ...(corsOptions ? { cors: corsOptions } : {}),
   connectionStateRecovery: { maxDisconnectionDuration: 120_000, skipMiddlewares: false },
 });
 
@@ -57,7 +58,7 @@ app.use(helmet({
       }
     : false,
 }));
-app.use(cors({ origin: clientOrigin, credentials: true }));
+if (corsOptions) app.use(cors(corsOptions));
 app.use(express.json({ limit: '32kb' }));
 
 app.get('/api/health', (_request, response) => {

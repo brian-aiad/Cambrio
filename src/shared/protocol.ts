@@ -44,7 +44,15 @@ export interface ServerNotice {
   playerId?: string;
 }
 
-export const displayNameSchema = z.string().trim().min(2).max(20).regex(/^[\p{L}\p{N} _.'-]+$/u, 'Use letters, numbers, spaces, apostrophes, periods, underscores, or hyphens.');
+export function normalizeDisplayName(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLocaleLowerCase()
+    .replace(/(^|[\s_.'-])(\p{L})/gu, (_match, separator: string, letter: string) => `${separator}${letter.toLocaleUpperCase()}`);
+}
+
+export const displayNameSchema = z.string().trim().min(2).max(20).regex(/^[\p{L}\p{N} _.'-]+$/u, 'Use letters, numbers, spaces, apostrophes, periods, underscores, or hyphens.').transform(normalizeDisplayName);
 export const handleSchema = z.string().trim().toLowerCase().min(3).max(20).regex(/^[a-z0-9_]+$/, 'Use lowercase letters, numbers, or underscores.');
 export const roomCodeSchema = z.string().trim().toUpperCase().regex(/^[A-HJ-NP-Z2-9]{8}$/);
 

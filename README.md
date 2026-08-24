@@ -19,18 +19,19 @@ The web client runs at `http://localhost:5173`; the realtime server runs at `htt
 ```bash
 npm run check
 npm run smoke:runtime
+npm run smoke:reconnect
 npm run stress:socket
 npm run stress:actions
 ```
 
-`npm run check` runs linting, strict TypeScript checks, the deterministic rules suite, 350 randomized full games across every supported room size, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run stress:actions` attacks duplicate and mutually exclusive realtime actions. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
+`npm run check` runs linting, strict TypeScript checks, the deterministic rules suite, 350 randomized full games across every supported room size, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run smoke:reconnect` interrupts a live transport and verifies that the same player returns to exactly one seat. `npm run stress:actions` attacks duplicate and mutually exclusive realtime actions. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
 
 ## Production
 
 1. Connect the GitHub repository in Supabase with working directory `.` and enable **Deploy to production**. The migration under `supabase/migrations/` is then applied from `main`.
 2. Enable anonymous sign-ins, Google OAuth, email magic links, and manual identity linking. Configure Cloudflare Turnstile in Supabase Auth before setting `VITE_TURNSTILE_SITE_KEY`.
-3. Configure the variables from `.env.example` in one Railway Node service. Leave `VITE_SERVER_URL` unset when the client and server use the same public domain.
-4. Build with `npm run build`, start with `npm start`, and configure `/api/health` as the Railway deployment health check. Keep one service replica for v1; multiple replicas require a Socket.IO Redis adapter.
+3. In Render, create a Blueprint from this repository. [`render.yaml`](render.yaml) provisions the single Node web service, production build, health check, and same-origin realtime endpoint. Supply the four requested Supabase values; leave `VITE_SERVER_URL` and `CLIENT_ORIGIN` unset when the client and server share the Render domain.
+4. Keep one service replica for v1. Multiple replicas require a Socket.IO Redis adapter because an in-flight room must have one authoritative process. Add `VITE_TURNSTILE_SITE_KEY` separately only after Turnstile is configured in Supabase Auth.
 
 Do not commit the database password, service-role key, Supabase access token, or Turnstile secret. Only the Supabase project URL, publishable/anon key, and Turnstile site key belong in `VITE_*` variables.
 

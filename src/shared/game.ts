@@ -266,6 +266,9 @@ export function applyGameCommand(
     case 'DRAW': {
       requireTurnCommand(state, player.id, 'awaiting_draw');
       if (state.transfer) fail('TRANSFER_PENDING', 'A mandatory card transfer is pending.');
+      // The previous discard is fair game until the active player commits to
+      // drawing. From this point on, only the new discard may open a stack race.
+      state.stackOpen = false;
       const cardId = drawCard(state, random);
       if (!cardId) {
         finishRound(state);
@@ -290,8 +293,10 @@ export function applyGameCommand(
       if (targetIndex < 0) fail('NOT_OWNED', 'That card is not owned by the active player.');
       const drawn = state.turn!.drawnCardId;
       if (!drawn) fail('NO_DRAW', 'No card has been drawn.');
+      const targetSlot = cardSlot(player, command.targetCardId, targetIndex);
       replaceOwnedCard(player, command.targetCardId, drawn);
       openDiscard(state, command.targetCardId);
+      effects.push({ type: 'turn', playerId: player.id, message: `${player.name} swapped the draw into ${slotCode(targetSlot)}.` });
       endTurn(state, now, effects);
       break;
     }
@@ -588,8 +593,8 @@ function selectPowerTarget(
       power.targets = [cardId];
     } else {
       if (owner.id === player.id) fail('OPPONENT_TARGET_REQUIRED', "Choose an opponent's card.");
-      swapOwnedCards(state, power.targets[0], cardId);
-      effects.push({ type: 'power', playerId: player.id, message: 'Blind swap complete.' });
+      const summary = swapOwnedCards(state, power.targets[0], cardId);
+      effects.push({ type: 'power', playerId: player.id, message: `Blind swap · ${summary}.` });
       endTurn(state, now, effects);
       return;
     }
@@ -624,8 +629,8 @@ function completePower(
   if (!power || power.status !== 'revealing') fail('POWER_NOT_REVEALED', 'Finish selecting the power targets first.');
   if (power.kind === 'black_king' && swap && power.targets.length === 2) {
     if (canSwapOwnedCards(state, power.targets[0], power.targets[1])) {
-      swapOwnedCards(state, power.targets[0], power.targets[1]);
-      effects.push({ type: 'power', playerId: player.id, message: 'Black King swap complete.' });
+      const summary = swapOwnedCards(state, power.targets[0], power.targets[1]);
+      effects.push({ type: 'power', playerId: player.id, message: `Black King · ${summary}.` });
     } else {
       effects.push({ type: 'power', playerId: player.id, message: 'A selected card moved before the swap, so the cards stay where they are.' });
     }
@@ -634,7 +639,7 @@ function completePower(
   endTurn(state, now, effects);
 }
 
-function swapOwnedCards(state: GameState, firstId: string, secondId: string): void {
+function swapOwnedCards(state: GameState, firstId: string, secondId: string): string {
   const firstOwner = state.players.find((player) => player.cards.includes(firstId));
   const secondOwner = state.players.find((player) => player.cards.includes(secondId));
   if (!firstOwner || !secondOwner || firstOwner.id === secondOwner.id) fail('BAD_SWAP', 'Choose cards owned by different players.');
@@ -648,6 +653,11 @@ function swapOwnedCards(state: GameState, firstId: string, secondId: string): vo
   delete secondOwner.cardSlots[secondId];
   firstOwner.cardSlots[secondId] = firstSlot;
   secondOwner.cardSlots[firstId] = secondSlot;
+  return `${firstOwner.name} ${slotCode(firstSlot)} ↔ ${secondOwner.name} ${slotCode(secondSlot)}`;
+}
+
+function slotCode(slot: number): string {
+  return slot === 0 ? 'TL' : slot === 1 ? 'TR' : slot === 2 ? 'BL' : slot === 3 ? 'BR' : `+${slot - 3}`;
 }
 
 function canSwapOwnedCards(state: GameState, firstId: string, secondId: string): boolean {

@@ -12,23 +12,23 @@ Cambrio should feel like a focused native card game, not a themed casino page. T
 - **Error red** `#c94b56`: wrong stacks, urgent timers, removal, and destructive feedback only.
 - **Cool neutral** `#f3f5fa` / white: lobby, onboarding, prompts, and face-up cards. Beige is not part of the palette.
 
-The custom Cambrio mark is a card plus a broken circular loop: memory, return, and a changing hand. The mark and game-action symbols are inline SVG so they remain crisp and color-consistent at every device scale. Lucide is limited to familiar utility controls such as sound, copy, close, and profile.
+The custom Cambrio mark is a pair of offset cards connected by opposing arrows: a hand changes, but position and memory remain. It deliberately avoids a generic letter monogram. The mark and game-action symbols are inline SVG so they remain crisp and color-consistent at every device scale. Lucide is limited to familiar utility controls such as sound, copy, close, and profile.
 
 ## Spatial memory
 
 - Starting slots are always TL, TR, BL, BR. Removing or replacing a card never moves the other identities.
-- Fifth and sixth local cards become a right-side +1/+2 column. This preserves the original 2×2 block and keeps a six-card hand to two rows.
-- Seven opponents use one desktop row, a four-plus-three mobile grid, and one landscape row. Each opponent remains in seat order.
+- Fifth and sixth local cards occupy stable +1/+2 positions without reordering TL/TR/BL/BR.
+- Seven opponents use one compressed mobile rail and one desktop/landscape row. Seat order and each opponent's TL/TR/BL/BR geometry never change.
 - Empty slots remain outlined and labeled. The absence of a card is meaningful game information.
 
 ## Direct interaction
 
 - Tap the deck to draw.
-- After a draw, tap **Discard drawn card** or tap one highlighted owned slot to replace it.
+- After a draw, tap **Discard** or tap one highlighted owned slot to replace it.
 - During an open stack race, tap any remembered table card directly. There is no stack-mode button and no player-selection modal.
 - Power cards immediately highlight only legal targets. Prompts state the single next action and offer the quieter **Skip ability** escape.
-- Peeks use press-and-hold. Blur, pointer cancellation, or release conceals private information immediately.
-- Black King selects own card, then opponent card, reveals both only while held, then offers **Swap cards** or **Keep positions**.
+- Peeks reveal immediately after one legal card tap, remain visible for a short timed memory window, then conceal and complete automatically. Leaving or blurring the window conceals immediately.
+- Black King selects one owned card and then one opponent card, reveals both for the same timed memory window, then offers **Swap** or **Keep**.
 
 ## Motion and feedback
 

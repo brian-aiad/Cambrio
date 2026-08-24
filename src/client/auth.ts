@@ -1,4 +1,4 @@
-import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
+import type { Session, SupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -13,7 +13,16 @@ declare global {
   }
 }
 
-export const supabase: SupabaseClient | undefined = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : undefined;
+let supabase: SupabaseClient | undefined;
+let supabasePromise: Promise<SupabaseClient> | undefined;
+
+export async function getSupabase(): Promise<SupabaseClient | undefined> {
+  if (!supabaseUrl || !supabaseKey) return undefined;
+  if (supabase) return supabase;
+  supabasePromise ??= import('@supabase/supabase-js').then(({ createClient }) => createClient(supabaseUrl, supabaseKey));
+  supabase = await supabasePromise;
+  return supabase;
+}
 
 export interface ClientSession {
   token?: string;
@@ -24,6 +33,7 @@ export interface ClientSession {
 
 export async function ensureClientSession(): Promise<ClientSession> {
   const visitorId = getVisitorId();
+  const supabase = await getSupabase();
   if (!supabase) return { visitorId, anonymous: true };
   let { data } = await supabase.auth.getSession();
   if (!data.session) {

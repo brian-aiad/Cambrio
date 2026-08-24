@@ -22,6 +22,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "smoke:runtime": "node scripts/runtime-smoke.mjs",
+    "smoke:reconnect": "node scripts/reconnect-smoke.mjs",
     "stress:socket": "node scripts/socket-load-smoke.mjs",
     "stress:actions": "node scripts/action-spam-smoke.mjs",
     "audit:eight": "node scripts/eight-player-audit.mjs",

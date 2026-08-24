@@ -35,6 +35,41 @@ function emptyHand(state: GameState, playerId: string): void {
 }
 
 describe('command safety matrix', () => {
+  it('keeps the previous discard stackable until the active player draws, then closes it', () => {
+    let state = ready(2);
+    const first = state.turn!.playerId;
+    state = drawAndDiscard(state, '6', 'hearts');
+    const next = state.turn!.playerId;
+    const nextPlayer = state.players.find((player) => player.id === next)!;
+    const target = nextPlayer.cards[0];
+    state.cards[target].rank = '6';
+
+    expect(state.stackOpen).toBe(true);
+    const beforeDraw = applyGameCommand(state, {
+      type: 'STACK_ATTEMPT',
+      playerId: next,
+      targetCardId: target,
+      discardGeneration: state.discardGeneration,
+    }, 2_010, random);
+    expect(beforeDraw.effects.some((effect) => effect.type === 'stack')).toBe(true);
+
+    state = drawAndDiscard(ready(2), '6', 'hearts');
+    const active = state.turn!.playerId;
+    const other = state.players.find((player) => player.id !== active)!;
+    const lateTarget = other.cards[0];
+    state.cards[lateTarget].rank = '6';
+    const generation = state.discardGeneration;
+    state = applyGameCommand(state, { type: 'DRAW', playerId: active }, 2_020, random).state;
+    expect(state.stackOpen).toBe(false);
+    expect(() => applyGameCommand(state, {
+      type: 'STACK_ATTEMPT',
+      playerId: other.id,
+      targetCardId: lateTarget,
+      discardGeneration: generation,
+    }, 2_021, random)).toThrowError(/no longer stackable/i);
+    expect(first).toBeDefined();
+  });
+
   it('rejects out-of-turn draws, early discards, foreign swaps, and duplicate peeks', () => {
     let state = ready(2);
     const active = state.turn!.playerId;
