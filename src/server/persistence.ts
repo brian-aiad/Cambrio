@@ -37,13 +37,14 @@ export interface Persistence {
 const emptyStats = (): StoredStats => ({ games: 0, wins: 0, winRate: 0 });
 
 export class MemoryPersistence implements Persistence {
-  private rooms = new Map<string, { snapshot: unknown; expiresAt: number }>();
+  private rooms = new Map<string, { snapshot: unknown; expiresAt: number; version: number }>();
   private profiles = new Map<string, StoredProfile>();
   private stats = new Map<string, StoredStats>();
   private matches = new Set<string>();
 
-  async saveRoom(code: string, snapshot: unknown, _version: number, expiresAt: number) {
-    this.rooms.set(code, { snapshot: structuredClone(snapshot), expiresAt });
+  async saveRoom(code: string, snapshot: unknown, version: number, expiresAt: number) {
+    const current = this.rooms.get(code);
+    if (!current || current.version <= version) this.rooms.set(code, { snapshot: structuredClone(snapshot), expiresAt, version });
   }
   async loadRoom<T>(code: string) {
     const room = this.rooms.get(code);
@@ -92,12 +93,11 @@ export class SupabasePersistence implements Persistence {
     this.client = createClient(url, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
   }
   async saveRoom(code: string, snapshot: unknown, version: number, expiresAt: number) {
-    const { error } = await this.client.from('active_rooms').upsert({
-      code,
-      snapshot,
-      state_version: version,
-      expires_at: new Date(expiresAt).toISOString(),
-      updated_at: new Date().toISOString(),
+    const { error } = await this.client.rpc('save_cambrio_room', {
+      code_input: code,
+      snapshot_input: snapshot,
+      state_version_input: version,
+      expires_at_input: new Date(expiresAt).toISOString(),
     });
     if (error) throw error;
   }
@@ -183,4 +183,3 @@ export function createPersistence(): Persistence {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   return url && key ? new SupabasePersistence(url, key) : new MemoryPersistence();
 }
-

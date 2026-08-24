@@ -504,6 +504,15 @@ function selectPowerTarget(
   const owner = state.players.find((candidate) => candidate.cards.includes(cardId) && !candidate.forfeited);
   if (!owner) fail('BAD_TARGET', 'That card cannot be targeted.');
 
+  if ((power.kind === 'blind_swap' || power.kind === 'black_king') && power.targets.length === 1) {
+    const firstOwner = state.players.find((candidate) => candidate.cards.includes(power.targets[0]) && !candidate.forfeited);
+    if (!firstOwner || firstOwner.id !== player.id) {
+      power.targets = [];
+      effects.push({ type: 'power', playerId: player.id, message: 'The selected card moved. Choose one of your cards again.' });
+      if (owner.id !== player.id) return;
+    }
+  }
+
   if (power.kind === 'own_peek') {
     if (owner.id !== player.id) fail('OWN_TARGET_REQUIRED', 'Choose one of your cards.');
     power.targets = [cardId];
@@ -553,8 +562,12 @@ function completePower(
   const power = state.turn?.power;
   if (!power || power.status !== 'revealing') fail('POWER_NOT_REVEALED', 'Finish selecting the power targets first.');
   if (power.kind === 'black_king' && swap && power.targets.length === 2) {
-    swapOwnedCards(state, power.targets[0], power.targets[1]);
-    effects.push({ type: 'power', playerId: player.id, message: 'Black King swap complete.' });
+    if (canSwapOwnedCards(state, power.targets[0], power.targets[1])) {
+      swapOwnedCards(state, power.targets[0], power.targets[1]);
+      effects.push({ type: 'power', playerId: player.id, message: 'Black King swap complete.' });
+    } else {
+      effects.push({ type: 'power', playerId: player.id, message: 'A selected card moved before the swap, so the cards stay where they are.' });
+    }
   }
   delete state.temporaryReveals[player.id];
   endTurn(state, now, effects);
@@ -566,6 +579,12 @@ function swapOwnedCards(state: GameState, firstId: string, secondId: string): vo
   if (!firstOwner || !secondOwner || firstOwner.id === secondOwner.id) fail('BAD_SWAP', 'Choose cards owned by different players.');
   firstOwner.cards[firstOwner.cards.indexOf(firstId)] = secondId;
   secondOwner.cards[secondOwner.cards.indexOf(secondId)] = firstId;
+}
+
+function canSwapOwnedCards(state: GameState, firstId: string, secondId: string): boolean {
+  const firstOwner = state.players.find((player) => player.cards.includes(firstId));
+  const secondOwner = state.players.find((player) => player.cards.includes(secondId));
+  return Boolean(firstOwner && secondOwner && firstOwner.id !== secondOwner.id);
 }
 
 function transferCard(state: GameState, cardId: string, now: number, effects: GameEffect[]): void {

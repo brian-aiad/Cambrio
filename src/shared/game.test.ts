@@ -119,6 +119,44 @@ describe('special powers', () => {
     expect(game.turn?.stage).toBe('awaiting_draw');
     expect(game.turn?.playerId).not.toBe(active);
   });
+
+  it('recovers when a concurrent stack moves the first blind-swap target', () => {
+    let game = readyGame(2);
+    const activeId = game.turn!.playerId;
+    const active = game.players.find((player) => player.id === activeId)!;
+    const opponent = game.players.find((player) => player.id !== activeId)!;
+    const [firstJack, secondJack] = game.deck.filter((id) => game.cards[id].rank === 'J').slice(0, 2);
+
+    const replacedCard = active.cards[0];
+    active.cards[0] = firstJack;
+    game.deck[game.deck.indexOf(firstJack)] = replacedCard;
+    [game.deck[game.deck.indexOf(secondJack)], game.deck[game.deck.length - 1]] = [game.deck.at(-1)!, secondJack];
+
+    game = applyGameCommand(game, { type: 'DRAW', playerId: activeId }, 2_000, fixedRandom).state;
+    game = applyGameCommand(game, { type: 'DISCARD_DRAWN', playerId: activeId }, 2_000, fixedRandom).state;
+    game = applyGameCommand(game, { type: 'POWER_USE', playerId: activeId }, 2_100, fixedRandom).state;
+    game = applyGameCommand(game, { type: 'POWER_SELECT', playerId: activeId, targetCardId: firstJack }, 2_200, fixedRandom).state;
+
+    game = applyGameCommand(
+      game,
+      { type: 'STACK_ATTEMPT', playerId: opponent.id, targetCardId: firstJack, discardGeneration: game.discardGeneration },
+      2_300,
+      fixedRandom,
+    ).state;
+    game = applyGameCommand(game, { type: 'TRANSFER_CARD', playerId: opponent.id, cardId: opponent.cards[0] }, 2_400, fixedRandom).state;
+
+    const opponentTarget = game.players.find((player) => player.id === opponent.id)!.cards[0];
+    const reset = applyGameCommand(game, { type: 'POWER_SELECT', playerId: activeId, targetCardId: opponentTarget }, 2_500, fixedRandom);
+    game = reset.state;
+    expect(game.turn?.power?.targets).toEqual([]);
+    expect(reset.effects.some((effect) => effect.message?.includes('selected card moved'))).toBe(true);
+
+    const newOwnTarget = game.players.find((player) => player.id === activeId)!.cards[0];
+    game = applyGameCommand(game, { type: 'POWER_SELECT', playerId: activeId, targetCardId: newOwnTarget }, 2_600, fixedRandom).state;
+    game = applyGameCommand(game, { type: 'POWER_SELECT', playerId: activeId, targetCardId: opponentTarget }, 2_700, fixedRandom).state;
+    expect(game.turn?.playerId).toBe(opponent.id);
+    expect(game.turn?.stage).toBe('awaiting_draw');
+  });
 });
 
 describe('caller-centered ending queue', () => {

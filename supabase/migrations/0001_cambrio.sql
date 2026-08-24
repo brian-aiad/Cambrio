@@ -42,6 +42,32 @@ create table if not exists public.active_rooms (
   updated_at timestamptz not null default now()
 );
 
+create or replace function public.save_cambrio_room(
+  code_input text,
+  snapshot_input jsonb,
+  state_version_input integer,
+  expires_at_input timestamptz
+) returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into active_rooms(code, snapshot, state_version, expires_at, updated_at)
+  values (code_input, snapshot_input, state_version_input, expires_at_input, now())
+  on conflict (code) do update
+    set snapshot = excluded.snapshot,
+        state_version = excluded.state_version,
+        expires_at = excluded.expires_at,
+        updated_at = now()
+    where active_rooms.state_version <= excluded.state_version;
+  return found;
+end;
+$$;
+
+revoke all on function public.save_cambrio_room(text, jsonb, integer, timestamptz) from public, anon, authenticated;
+grant execute on function public.save_cambrio_room(text, jsonb, integer, timestamptz) to service_role;
+
 alter table public.profiles enable row level security;
 alter table public.player_stats enable row level security;
 alter table public.matches enable row level security;
@@ -96,7 +122,15 @@ end;
 $$;
 
 revoke all on function public.record_cambrio_match(uuid, text, jsonb) from public, anon, authenticated;
+grant execute on function public.record_cambrio_match(uuid, text, jsonb) to service_role;
+
+grant select, insert, update, delete on table
+  public.profiles,
+  public.player_stats,
+  public.matches,
+  public.match_participants,
+  public.active_rooms
+to service_role;
 
 create index if not exists active_rooms_expiry_idx on public.active_rooms(expires_at);
 create index if not exists match_participants_user_idx on public.match_participants(user_id);
-

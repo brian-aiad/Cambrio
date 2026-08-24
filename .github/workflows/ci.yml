@@ -1,0 +1,33 @@
+name: quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Start compiled application
+        run: |
+          NODE_ENV=production npm start > /tmp/cambrio.log 2>&1 &
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:3001/api/health && exit 0
+            sleep 1
+          done
+          cat /tmp/cambrio.log
+          exit 1
+      - run: npm run smoke:runtime
+      - run: npm run stress:socket

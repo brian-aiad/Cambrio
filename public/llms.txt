@@ -1,0 +1,19 @@
+# Cambrio
+
+> Cambrio is a browser-based, private-room multiplayer memory card game for 2–8 friends.
+
+## Play
+
+- Create a private room from the home page and share its invite link.
+- Join without a download or permanent account.
+- Private room URLs are temporary and should not be indexed.
+
+## Rules summary
+
+- Remember hidden cards, draw or swap on your turn, and stack matching ranks in real time.
+- Special powers are attached to 7 through Queen and black Kings.
+- Red Kings score −1, there are no Jokers, and the lowest score wins.
+
+## More information
+
+- [Cambrio source and complete game specification](https://github.com/brian-aiad/Cambrio)

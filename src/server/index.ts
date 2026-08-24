@@ -16,6 +16,7 @@ import { RoomManager, type Membership } from './rooms.js';
 const port = Number(process.env.PORT ?? 3001);
 const clientOrigin = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
 const production = process.env.NODE_ENV === 'production';
+const supabaseOrigin = safeOrigin(process.env.SUPABASE_URL);
 const persistence = createPersistence();
 const auth = new AuthService(persistence);
 const rooms = new RoomManager(persistence);
@@ -39,7 +40,23 @@ interface ServerToClientEvents {
   notice: (notice: ServerNotice) => void;
 }
 
-app.use(helmet({ contentSecurityPolicy: production ? undefined : false }));
+app.use(helmet({
+  contentSecurityPolicy: production
+    ? {
+        directives: {
+          defaultSrc: ["'self'"],
+          connectSrc: ["'self'", 'https://challenges.cloudflare.com', ...(supabaseOrigin ? [supabaseOrigin] : [])],
+          scriptSrc: ["'self'", 'https://challenges.cloudflare.com'],
+          frameSrc: ["'self'", 'https://challenges.cloudflare.com'],
+          imgSrc: ["'self'", 'data:', 'https:'],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+          frameAncestors: ["'none'"],
+        },
+      }
+    : false,
+}));
 app.use(cors({ origin: clientOrigin, credentials: true }));
 app.use(express.json({ limit: '32kb' }));
 
@@ -172,8 +189,29 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`Cambrio server listening on http://0.0.0.0:${port}`);
 });
 
+let shuttingDown = false;
+const shutdown = (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received; closing realtime connections.`);
+  const forcedExit = setTimeout(() => process.exit(1), 10_000);
+  forcedExit.unref();
+  io.close(() => server.close(() => process.exit(0)));
+};
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));
+
 function roomChannel(code: string): string {
   return `room:${code}`;
+}
+
+function safeOrigin(value?: string): string | undefined {
+  if (!value) return undefined;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
 }
 
 async function identityFromRequest(authorization?: string, visitorId?: string): Promise<ServerIdentity> {

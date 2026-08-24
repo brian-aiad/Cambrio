@@ -140,7 +140,8 @@ input::placeholder { color: #6f7f75; }
 .playing-card { appearance: none; width: clamp(58px, 6.3vw, 82px); aspect-ratio: 5 / 7; padding: 0; position: relative; flex: 0 0 auto; border-radius: 8px; border: 1px solid rgba(25,30,27,.24); background: #f4efe4; color: #16231c; box-shadow: 0 8px 20px rgba(0,0,0,.27), inset 0 0 0 2px rgba(255,255,255,.6); overflow: hidden; }
 .playing-card:disabled { opacity: 1; }
 .playing-card.red { color: #b23d3e; }
-.playing-card.face-down { background: linear-gradient(145deg, #153a2c, #0a2118); border: 2px solid #c6ad71; box-shadow: inset 0 0 0 3px #123226, inset 0 0 0 4px rgba(217,183,109,.46), 0 8px 20px rgba(0,0,0,.3); color: var(--gold); }
+.playing-card.face-down { background-color: #0a2118; background-image: linear-gradient(rgba(3,19,13,.05), rgba(3,19,13,.18)), url('/assets/cambrio-card-back.png'); background-size: cover; background-position: center; border: 2px solid #c6ad71; box-shadow: inset 0 0 0 2px rgba(5,24,17,.78), 0 8px 20px rgba(0,0,0,.3); color: var(--gold); }
+.playing-card.face-down .card-back-pattern { opacity: 0; }
 .card-back-pattern { width: 67%; aspect-ratio: 1; border: 1px solid rgba(217,183,109,.3); border-radius: 50%; display: grid; place-items: center; margin: auto; font-family: Georgia, serif; font-size: clamp(19px, 2vw, 28px); color: rgba(217,183,109,.66); }
 .playing-card.interactive { cursor: pointer; border-color: var(--gold-bright); box-shadow: 0 0 0 2px rgba(217,183,109,.18), 0 10px 24px rgba(0,0,0,.35); }
 .corner { position: absolute; left: 7px; top: 5px; display: grid; justify-items: center; line-height: 1; font-weight: 800; font-size: clamp(13px, 1.6vw, 18px); }
@@ -155,7 +156,8 @@ input::placeholder { color: #6f7f75; }
 .pile-zone { display: flex; align-items: center; gap: clamp(24px, 5vw, 58px); }
 .pile { display: grid; justify-items: center; gap: 8px; }
 .pile > span { color: #75867c; font-size: 8px; letter-spacing: .16em; }
-.deck-card { width: clamp(58px, 6.3vw, 82px); aspect-ratio: 5/7; border-radius: 8px; border: 2px solid #b89b5f; background: #0b251b; cursor: pointer; position: relative; box-shadow: 3px 3px 0 #071b13, 6px 6px 0 rgba(184,155,95,.35), 0 12px 25px rgba(0,0,0,.3); }
+.deck-card { width: clamp(58px, 6.3vw, 82px); aspect-ratio: 5/7; border-radius: 8px; border: 2px solid #b89b5f; background-color: #0b251b; background-image: linear-gradient(rgba(3,19,13,.08), rgba(3,19,13,.18)), url('/assets/cambrio-card-back.png'); background-size: cover; background-position: center; cursor: pointer; position: relative; box-shadow: 3px 3px 0 #071b13, 6px 6px 0 rgba(184,155,95,.35), 0 12px 25px rgba(0,0,0,.3); }
+.deck-card .card-back-pattern { opacity: 0; }
 .deck-card.draw-ready { animation: deckPulse 1.8s ease-in-out infinite; }
 .deck-card small { position: absolute; right: 5px; bottom: 4px; color: #9bad9f; font-size: 8px; }
 .drawn-panel { position: absolute; left: calc(50% + 95px); display: flex; align-items: center; gap: 15px; padding: 13px; border-radius: 13px; background: rgba(3,18,12,.88); border: 1px solid var(--line); }

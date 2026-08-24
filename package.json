@@ -22,6 +22,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "smoke:runtime": "node scripts/runtime-smoke.mjs",
+    "stress:socket": "node scripts/socket-load-smoke.mjs",
     "check": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

@@ -45,6 +45,7 @@ export interface RoomRuntime {
   createdAt: number;
   expiresAt: number;
   recordedGameId?: string;
+  checkpointVersion: number;
 }
 
 export interface Membership {
@@ -286,6 +287,7 @@ export class RoomManager {
       disconnectGrace: {},
       createdAt: now,
       expiresAt: now + ROOM_TTL_MS,
+      checkpointVersion: 0,
     };
     this.rooms.set(code, room);
     await this.save(room);
@@ -374,7 +376,8 @@ export class RoomManager {
 
   private async save(room: RoomRuntime): Promise<void> {
     room.expiresAt = Date.now() + ROOM_TTL_MS;
-    await this.persistence.saveRoom(room.code, room, room.game?.version ?? 0, room.expiresAt);
+    room.checkpointVersion = (room.checkpointVersion ?? room.game?.version ?? 0) + 1;
+    await this.persistence.saveRoom(room.code, room, room.checkpointVersion, room.expiresAt);
   }
 
   private rememberAction(id: string, result: { ok: boolean; code?: string; message?: string }): void {
