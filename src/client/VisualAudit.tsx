@@ -154,6 +154,9 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
       power.status = 'revealing';
       power.targets.forEach((target) => revealTarget(game.players, target));
     }
+  } else if (action.type === 'POWER_CONCEAL' && game.power?.kind === 'black_king') {
+    game.power.status = 'choosing';
+    for (const player of game.players) player.cards = player.cards.map((card) => game.power!.targets.includes(card.id) ? { id: card.id, slot: card.slot } : card);
   } else if (action.type === 'POWER_COMPLETE') {
     if (game.power?.kind === 'black_king' && action.swap && game.power.targets.length === 2) swapAuditCards(game.players, game.power.targets[0], game.power.targets[1]);
     game.power = undefined;
@@ -226,7 +229,7 @@ function powerForScene(scene: string, players: PlayerView[]): PowerState | undef
     'black-own': { kind: 'black_king', status: 'selecting', targets: [] },
     'black-opponent': { kind: 'black_king', status: 'selecting', targets: selfCard ? [selfCard] : [] },
     'black-reveal': { kind: 'black_king', status: 'revealing', targets: selfCard && opponentCard ? [selfCard, opponentCard] : [] },
-    'black-choice': { kind: 'black_king', status: 'revealing', targets: selfCard && opponentCard ? [selfCard, opponentCard] : [] },
+    'black-choice': { kind: 'black_king', status: 'choosing', targets: selfCard && opponentCard ? [selfCard, opponentCard] : [] },
   };
   return map[scene];
 }

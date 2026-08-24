@@ -301,7 +301,10 @@ describe('special powers', () => {
     expect(actorCards.filter((card) => [ownTarget, opponentTarget].includes(card.id)).every((card) => card.rank)).toBe(true);
     expect(opponentCards.filter((card) => [ownTarget, opponentTarget].includes(card.id)).every((card) => !card.rank)).toBe(true);
 
-    game = applyGameCommand(game, { type: 'POWER_COMPLETE', playerId: activeId, swap: true }, 2_102, fixedRandom).state;
+    game = applyGameCommand(game, { type: 'POWER_CONCEAL', playerId: activeId }, 2_102, fixedRandom).state;
+    expect(game.temporaryReveals[activeId]).toBeUndefined();
+    expect(projectGame(game, activeId).players.flatMap((player) => player.cards).filter((card) => [ownTarget, opponentTarget].includes(card.id)).every((card) => !card.rank)).toBe(true);
+    game = applyGameCommand(game, { type: 'POWER_COMPLETE', playerId: activeId, swap: true }, 2_103, fixedRandom).state;
     expect(game.players.find((player) => player.id === activeId)!.cardSlots[opponentTarget]).toBe(ownSlot);
     expect(game.players.find((player) => player.id === opponent.id)!.cardSlots[ownTarget]).toBe(opponentSlot);
     expect(game.temporaryReveals[activeId]).toBeUndefined();

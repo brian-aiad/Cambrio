@@ -38,6 +38,7 @@ interface ClientToServerEvents {
 }
 interface ServerToClientEvents {
   'room:state': (state: ReturnType<RoomManager['view']>) => void;
+  'room:left': (value: { message: string }) => void;
   notice: (notice: ServerNotice) => void;
 }
 
@@ -153,11 +154,13 @@ io.on('connection', (socket) => {
       if (rateLimited(clientActionId)) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
       const result = await rooms.handleGameAction(socket.data.membership, action);
       const outcome = result.effects?.find((effect) => effect.type === 'stack' || effect.type === 'penalty')?.type;
-      ack?.({ clientActionId, ok: true, outcome });
       for (const effect of result.effects ?? []) {
         if (effect.message) io.to(roomChannel(socket.data.membership!.roomCode)).emit('notice', { kind: effect.type, message: effect.message, playerId: effect.playerId });
       }
       await broadcast(socket.data.membership?.roomCode);
+      // State is emitted before acknowledgement so a chained interaction (the
+      // initial peek release in particular) reads the newly authoritative version.
+      ack?.({ clientActionId, ok: true, outcome });
     } catch (error) {
       ack?.(toAck(clientActionId, error));
     }
@@ -184,7 +187,9 @@ async function broadcast(code?: string): Promise<void> {
     try {
       socket.emit('room:state', rooms.view(room, playerId));
     } catch {
-      socket.emit('notice', { kind: 'error', message: 'Your seat is no longer active in this room.' });
+      socket.data.membership = undefined;
+      await socket.leave(roomChannel(code));
+      socket.emit('room:left', { message: 'The host removed your seat from this table.' });
     }
   }
 }

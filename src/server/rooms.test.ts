@@ -25,8 +25,9 @@ async function startedRoom() {
 
 async function completePeek(manager: RoomManager, membership: Membership) {
   const room = (await manager.get(membership.roomCode))!;
-  await manager.handleGameAction(membership, gameAction({ type: 'INITIAL_PEEK_START' }, room.game!.version));
-  await manager.handleGameAction(membership, gameAction({ type: 'INITIAL_PEEK_END' }, room.game!.version + 1));
+  const version = room.game!.version;
+  await manager.handleGameAction(membership, gameAction({ type: 'INITIAL_PEEK_START' }, version));
+  await manager.handleGameAction(membership, gameAction({ type: 'INITIAL_PEEK_END' }, version + 1));
 }
 
 describe('RoomManager integration', () => {
@@ -81,6 +82,33 @@ describe('RoomManager integration', () => {
       expect(view.game?.players.flatMap((player) => player.cards).some((card) => card.rank)).toBe(false);
       expect(view.game?.players.every((player) => player.cards.map((card) => card.slot).join(',') === '0,1,2,3')).toBe(true);
     }
+  });
+
+  it('promotes connected waiters as soon as full-lobby seats open', async () => {
+    const manager = new RoomManager(new MemoryPersistence());
+    const identities = Array.from({ length: 10 }, (_, index) => ({ userId: `queue-user-${index}`, anonymous: true } satisfies ServerIdentity));
+    const created = await manager.handleRoomAction(identities[0], undefined, roomAction({ type: 'ROOM_CREATE', name: 'Host' }));
+    const hostMembership = created.membership!;
+    const memberships: Membership[] = [hostMembership];
+    for (let index = 1; index < identities.length; index += 1) {
+      const joined = await manager.handleRoomAction(identities[index], undefined, roomAction({ type: 'ROOM_JOIN', code: hostMembership.roomCode, name: `Player ${index}` }));
+      memberships.push(joined.membership!);
+    }
+
+    await manager.disconnect(hostMembership.roomCode, memberships[8].playerId);
+    await manager.handleRoomAction(identities[0], hostMembership, roomAction({ type: 'ROOM_REMOVE', playerId: memberships[1].playerId }));
+    let room = (await manager.get(hostMembership.roomCode))!;
+    expect(room.players).toHaveLength(8);
+    expect(room.players.some((candidate) => candidate.id === memberships[9].playerId)).toBe(true);
+    expect(room.waiting.map((candidate) => candidate.id)).toEqual([memberships[8].playerId]);
+
+    await manager.handleRoomAction(identities[8], undefined, roomAction({ type: 'ROOM_JOIN', code: hostMembership.roomCode, name: 'Player 8' }));
+    await manager.handleRoomAction(identities[2], memberships[2], roomAction({ type: 'ROOM_LEAVE' }));
+    room = (await manager.get(hostMembership.roomCode))!;
+    expect(room.players).toHaveLength(8);
+    expect(room.players.some((candidate) => candidate.id === memberships[8].playerId)).toBe(true);
+    expect(room.waiting).toHaveLength(0);
+    expect(room.players.find((candidate) => candidate.id === memberships[8].playerId)?.ready).toBe(false);
   });
 
   it('reconnects without duplicating players and preserves the host through the reconnect grace period', async () => {
@@ -156,6 +184,20 @@ describe('RoomManager integration', () => {
     expect(room.game!.deck).toHaveLength(deckAfterFirst);
   });
 
+  it('rejects a delayed non-stack action from an older game version', async () => {
+    const { manager, hostMembership, guestMembership } = await startedRoom();
+    await completePeek(manager, hostMembership);
+    await completePeek(manager, guestMembership);
+    let room = (await manager.get(hostMembership.roomCode))!;
+    const activeMembership = room.game!.turn!.playerId === hostMembership.playerId ? hostMembership : guestMembership;
+    const staleVersion = room.game!.version;
+    await manager.handleGameAction(activeMembership, gameAction({ type: 'DRAW' }, staleVersion));
+    room = (await manager.get(hostMembership.roomCode))!;
+
+    await expect(manager.handleGameAction(activeMembership, gameAction({ type: 'DISCARD_DRAWN' }, staleVersion))).rejects.toMatchObject({ code: 'STALE_STATE' });
+    expect((await manager.get(hostMembership.roomCode))!.game!.turn?.stage).toBe('deciding');
+  });
+
   it('coalesces simultaneous duplicate actions while the first checkpoint is in flight', async () => {
     const { manager, hostMembership, guestMembership } = await startedRoom();
     await completePeek(manager, hostMembership);
@@ -191,11 +233,15 @@ describe('RoomManager integration', () => {
       await manager.handleGameAction(activeMembership, gameAction({ type: 'DISCARD_DRAWN' }, room.game!.version));
       room = (await manager.get(hostMembership.roomCode))!;
       const generation = room.game!.discardGeneration;
-      const first = await manager.handleGameAction(activeMembership, gameAction({ type: 'STACK_ATTEMPT', targetCardId: wrongTarget, discardGeneration: generation }, room.game!.version));
+      const raceVersion = room.game!.version;
+      const first = await manager.handleGameAction(activeMembership, gameAction({ type: 'STACK_ATTEMPT', targetCardId: wrongTarget, discardGeneration: generation }, raceVersion));
       expect(first.effects?.some((effect) => effect.type === 'penalty')).toBe(true);
       room = (await manager.get(hostMembership.roomCode))!;
       expect(room.game!.stackOpen).toBe(true);
       await expect(manager.handleGameAction(activeMembership, gameAction({ type: 'STACK_ATTEMPT', targetCardId: wrongTarget, discardGeneration: generation }, room.game!.version))).rejects.toMatchObject({ code: 'RATE_LIMIT' });
+      now.mockReturnValue(5_001_000);
+      const staleButSameRace = await manager.handleGameAction(activeMembership, gameAction({ type: 'STACK_ATTEMPT', targetCardId: wrongTarget, discardGeneration: generation }, raceVersion));
+      expect(staleButSameRace.effects?.some((effect) => effect.type === 'penalty')).toBe(true);
     } finally {
       now.mockRestore();
     }
@@ -219,5 +265,18 @@ describe('RoomManager integration', () => {
     room = (await manager.get(hostMembership.roomCode))!;
     await manager.handleGameAction(waitingMembership, gameAction({ type: 'INITIAL_PEEK_START' }, room.game!.version));
     expect((await manager.get(hostMembership.roomCode))!.game!.temporaryReveals[waitingMembership.playerId]).toHaveLength(2);
+  });
+
+  it('removes a waiting player who explicitly leaves during an active round', async () => {
+    const { manager, hostMembership } = await startedRoom();
+    const waitingIdentity: ServerIdentity = { userId: 'departing-waiter', anonymous: true };
+    const joined = await manager.handleRoomAction(waitingIdentity, undefined, roomAction({ type: 'ROOM_JOIN', code: hostMembership.roomCode, name: 'Maya' }));
+    const waitingMembership = joined.membership!;
+    expect(waitingMembership.waiting).toBe(true);
+
+    await manager.handleRoomAction(waitingIdentity, waitingMembership, roomAction({ type: 'ROOM_LEAVE' }));
+    const room = (await manager.get(hostMembership.roomCode))!;
+    expect(room.waiting.some((candidate) => candidate.id === waitingMembership.playerId)).toBe(false);
+    expect(room.disconnectGrace[waitingMembership.playerId]).toBeUndefined();
   });
 });

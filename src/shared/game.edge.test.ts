@@ -107,7 +107,8 @@ describe('command safety matrix', () => {
     state = drawAndDiscard(state, 'K', state.cards[blackKing].suit);
     state = applyGameCommand(state, { type: 'POWER_SELECT', playerId: activeId, targetCardId: own }, 2_100, random).state;
     state = applyGameCommand(state, { type: 'POWER_SELECT', playerId: activeId, targetCardId: theirs }, 2_101, random).state;
-    state = applyGameCommand(state, { type: 'POWER_COMPLETE', playerId: activeId, swap: false }, 2_102, random).state;
+    state = applyGameCommand(state, { type: 'POWER_CONCEAL', playerId: activeId }, 2_102, random).state;
+    state = applyGameCommand(state, { type: 'POWER_COMPLETE', playerId: activeId, swap: false }, 2_103, random).state;
     expect(state.players.find((player) => player.id === activeId)!.cardSlots[own]).toBe(beforeOwn);
     expect(state.players.find((player) => player.id === opponent.id)!.cardSlots[theirs]).toBe(beforeTheirs);
   });
@@ -220,7 +221,8 @@ describe('zero-card irreversibility', () => {
       const opponentSlot = opponent.cardSlots[opponentCard];
       state = applyGameCommand(state, { type: 'POWER_SELECT', playerId: activeId, targetCardId: opponentCard }, 2_001, random).state;
       expect(state.temporaryReveals[activeId]).toEqual([opponentCard]);
-      state = applyGameCommand(state, { type: 'POWER_COMPLETE', playerId: activeId, swap: true }, 2_002, random).state;
+      if (expectedPower === 'black_king') state = applyGameCommand(state, { type: 'POWER_CONCEAL', playerId: activeId }, 2_002, random).state;
+      state = applyGameCommand(state, { type: 'POWER_COMPLETE', playerId: activeId, swap: true }, 2_003, random).state;
       expect(state.players.find((player) => player.id === opponent.id)!.cardSlots[opponentCard]).toBe(opponentSlot);
       expect(state.players.find((player) => player.id === activeId)!.cards).toHaveLength(0);
     }

@@ -6,6 +6,7 @@ coverage/
 *.log
 .DS_Store
 .vite/
+.playwright-cli/
 output/
 
 .vercel

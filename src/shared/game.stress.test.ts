@@ -78,7 +78,10 @@ function powerCommand(state: GameState, random: () => number): GameCommand {
     return random() < 0.32 ? { type: 'POWER_DECLINE', playerId: player.id } : { type: 'POWER_USE', playerId: player.id };
   }
   if (power.status === 'revealing') {
-    return { type: 'POWER_COMPLETE', playerId: player.id, swap: power.kind === 'black_king' && random() < 0.5 };
+    return power.kind === 'black_king' ? { type: 'POWER_CONCEAL', playerId: player.id } : { type: 'POWER_COMPLETE', playerId: player.id };
+  }
+  if (power.status === 'choosing') {
+    return { type: 'POWER_COMPLETE', playerId: player.id, swap: random() < 0.5 };
   }
   const opponent = legalOpponentCard(state, player.id);
   const own = player.cards[0];

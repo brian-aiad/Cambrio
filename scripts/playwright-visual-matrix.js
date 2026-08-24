@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 async (page) => {
-  const root = 'C:/Users/kingt/Desktop/cambrio/output/playwright/final';
+  const root = 'output/playwright/final';
   const base = 'http://localhost:5173/__visual-audit';
   const slug = (value) => value.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
   const capture = async (scene, players, viewport, suffix = '', wait = 420) => {
@@ -36,6 +36,9 @@ async (page) => {
   }
   await capture('cards', 2, { width: 390, height: 844 });
   await capture('cards', 2, { width: 1440, height: 900 });
+  await capture('ending', 8, { width: 320, height: 568 });
+  await capture('ending', 8, { width: 844, height: 390 });
+  await capture('results', 8, { width: 390, height: 844 });
 
-  return { screenshots: coreScenes.length + 1 + 7 + devices.length * 5 + 2 };
+  return { screenshots: coreScenes.length + 1 + 7 + devices.length * 5 + 5 };
 }

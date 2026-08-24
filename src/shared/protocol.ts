@@ -76,6 +76,7 @@ export const gameActionSchema = z.discriminatedUnion('type', [
   z.object({ ...baseGameAction, type: z.literal('POWER_USE') }),
   z.object({ ...baseGameAction, type: z.literal('POWER_DECLINE') }),
   z.object({ ...baseGameAction, type: z.literal('POWER_SELECT'), targetCardId: z.string() }),
+  z.object({ ...baseGameAction, type: z.literal('POWER_CONCEAL') }),
   z.object({ ...baseGameAction, type: z.literal('POWER_COMPLETE'), swap: z.boolean().optional() }),
   z.object({ ...baseGameAction, type: z.literal('STACK_ATTEMPT'), targetCardId: z.string(), discardGeneration: z.number().int() }),
   z.object({ ...baseGameAction, type: z.literal('TRANSFER_CARD'), cardId: z.string() }),

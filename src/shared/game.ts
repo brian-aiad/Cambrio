@@ -30,7 +30,7 @@ export interface EnginePlayer {
 
 export interface PowerState {
   kind: PowerKind;
-  status: 'offered' | 'selecting' | 'revealing';
+  status: 'offered' | 'selecting' | 'revealing' | 'choosing';
   targets: string[];
 }
 
@@ -90,6 +90,7 @@ export type GameCommand =
   | { type: 'POWER_USE'; playerId: string }
   | { type: 'POWER_DECLINE'; playerId: string }
   | { type: 'POWER_SELECT'; playerId: string; targetCardId: string }
+  | { type: 'POWER_CONCEAL'; playerId: string }
   | { type: 'POWER_COMPLETE'; playerId: string; swap?: boolean }
   | { type: 'STACK_ATTEMPT'; playerId: string; targetCardId: string; discardGeneration: number }
   | { type: 'TRANSFER_CARD'; playerId: string; cardId: string }
@@ -316,6 +317,15 @@ export function applyGameCommand(
     case 'POWER_SELECT': {
       requireTurnCommand(state, player.id, 'power');
       selectPowerTarget(state, player, command.targetCardId, effects, now);
+      break;
+    }
+    case 'POWER_CONCEAL': {
+      requireTurnCommand(state, player.id, 'power');
+      const power = state.turn!.power;
+      if (!power || power.kind !== 'black_king' || power.status !== 'revealing') fail('POWER_NOT_REVEALED', 'No Black King reveal is ready to conceal.');
+      power.status = 'choosing';
+      delete state.temporaryReveals[player.id];
+      state.turn!.deadlineAt = now + TURN_MS;
       break;
     }
     case 'POWER_COMPLETE': {
@@ -626,7 +636,8 @@ function completePower(
   now: number,
 ): void {
   const power = state.turn?.power;
-  if (!power || power.status !== 'revealing') fail('POWER_NOT_REVEALED', 'Finish selecting the power targets first.');
+  const canComplete = power?.kind === 'black_king' ? power.status === 'choosing' : power?.status === 'revealing';
+  if (!power || !canComplete) fail('POWER_NOT_REVEALED', 'Finish viewing the power targets first.');
   if (power.kind === 'black_king' && swap && power.targets.length === 2) {
     if (canSwapOwnedCards(state, power.targets[0], power.targets[1])) {
       const summary = swapOwnedCards(state, power.targets[0], power.targets[1]);

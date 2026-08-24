@@ -31,12 +31,16 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 - Power cards immediately highlight only legal targets. Prompts state the single next action and offer the quieter **Skip ability** escape.
 - Peeks reveal immediately after one legal card tap, remain visible for a short timed memory window, then conceal and complete automatically. Leaving or blurring the window conceals immediately.
 - Black King selects one owned card and then one opponent card, reveals both for the same timed memory window, then offers **Swap** or **Keep**.
+- The Black King decision is a distinct concealed server state: both ranks are removed from the browser projection before **Swap** or **Keep** appears.
+- Action hit areas never translate while awaiting input. The deck signals readiness with light and shadow only, so a fast touch, keyboard activation, and browser automation all acquire the same stable target.
 
 ## Motion and feedback
 
 - A card identity keeps a shared layout identity while moving between slots and piles; the animation communicates the state change instead of decorating it.
 - Blind swaps and Black King exchanges animate two numbered, face-down cards between their exact player and slot endpoints. Both destinations remain empty until the crossing cards arrive, so there is no ambiguous duplicate state.
 - A normal hand replacement and a successful stack animate from the exact source slot to discard. The travelling card turns face-up before arrival, making the public card change observable to every player.
+- Cambrio and zero-card endings occupy the permanent turn-status column with the current player and remaining-turn count; they never cover an opponent card.
+- Notices belong to the screen that created them. Spatial swaps, deal instructions, ending calls, and rematch confirmation use their native table/lobby state instead of duplicate toasts over the hand.
 - Correct stack: selected card lifts/scales, travels to discard, success cue remains long enough to read.
 - Wrong stack: selected card shakes in place, penalty occupies the next stable slot, and an explicit penalty cue remains visible for 1.5 seconds.
 - Drawn cards enter from the deck side; prompt surfaces use short spring transitions without bounce-heavy staging.
@@ -49,6 +53,10 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 - Every hidden card has an accessible spatial name (for example, “bottom left card”), and interactive states add “tap to select.”
 - Focus uses the same mint target language as touch highlighting. Color is always paired with copy, shape, or motion.
 - Duplicate client decisions are locked while awaiting acknowledgement. The server additionally coalesces identical in-flight action IDs, rate-limits guess spam, and remains authoritative for every result.
+- A temporary transport failure keeps the table visible in a **Reconnecting** state. Recovery restores the same server-owned seat; only session initialization failures use the fatal screen.
+- Full or active tables use a dedicated queue screen with a stable position, seated-player count, explicit departure, and automatic promotion when a seat becomes available.
+- A host removal invalidates that socket’s membership and returns the removed player home with a short explanation; no client remains on a stale table.
+- Turn and power decisions carry the authoritative game version. Delayed packets are rejected, while stack attempts remain tied to their discard generation so the realtime race stays fair.
 
 ## Reference principles
 

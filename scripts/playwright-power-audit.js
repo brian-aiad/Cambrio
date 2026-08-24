@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 async (page) => {
-  const root = 'C:/Users/kingt/Desktop/cambrio/output/playwright/iteration';
+  const root = 'output/playwright/iteration';
   await page.setViewportSize({ width: 390, height: 844 });
 
   await page.goto('http://localhost:5173/__visual-audit?scene=own-select&players=4');
@@ -41,6 +41,7 @@ async (page) => {
   await page.screenshot({ path: `${root}/black-king-auto-reveal.png` });
   await page.waitForTimeout(1_750);
   if (!(await page.locator('.interaction-prompt').textContent())?.includes('Swap positions?')) throw new Error('Black King did not advance to the swap-or-keep choice.');
+  if (await page.locator('.playing-card:not(.face-down)').count() !== 1) throw new Error('Black King target ranks remained in the rendered choice state after concealment.');
   await page.getByRole('button', { name: 'Swap', exact: true }).click();
   await page.waitForTimeout(160);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Black King swap did not launch two exact-position card flights.');

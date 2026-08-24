@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions, no-undef */
 async (page) => {
-  const outputRoot = 'C:/Users/kingt/Desktop/cambrio/output/playwright/iteration';
+  const outputRoot = 'output/playwright/iteration';
   await page.setViewportSize({ width: 390, height: 844 });
 
   await page.goto('http://localhost:5173/__visual-audit?scene=drawn&players=2');

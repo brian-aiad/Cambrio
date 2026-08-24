@@ -143,6 +143,7 @@ export class RoomManager {
           result = { membership, effects: transition.effects };
         } else {
           room.players = room.players.filter((candidate) => candidate.id !== target.id);
+          this.promoteWaiting(room);
           await this.save(room);
           result = { membership };
         }
@@ -156,11 +157,7 @@ export class RoomManager {
         room.game = undefined;
         room.initialPeekDeadlineAt = undefined;
         for (const candidate of room.players) candidate.ready = candidate.id === room.hostPlayerId;
-        while (room.players.length < 8 && room.waiting.length) {
-          const candidate = room.waiting.shift()!;
-          candidate.ready = false;
-          room.players.push(candidate);
-        }
+        this.promoteWaiting(room);
         await this.save(room);
         result = { membership, message: 'Back in the lobby. Ready up for another round.' };
         break;
@@ -196,6 +193,18 @@ export class RoomManager {
     const { room, player } = this.requireMembership(membership);
     if (!room.game || (room.phase !== 'game' && room.phase !== 'results')) throw new GameRuleError('NO_GAME', 'There is no active game.');
     if (room.waiting.some((candidate) => candidate.id === player.id)) throw new GameRuleError('WAITING', 'Waiting players cannot act in the current game.');
+    // Stack attempts have their own discard-generation lock and initial peeks
+    // are intentionally concurrent per player. Reveal completion/concealment
+    // must also survive a simultaneous stack mutation. Other turn and power
+    // decisions target the exact state seen so delayed packets cannot land later.
+    const independentlyConcurrent = action.type === 'STACK_ATTEMPT'
+      || action.type === 'INITIAL_PEEK_START'
+      || action.type === 'INITIAL_PEEK_END'
+      || action.type === 'POWER_CONCEAL'
+      || action.type === 'POWER_COMPLETE';
+    if (!independentlyConcurrent && action.expectedVersion !== room.game.version) {
+      throw new GameRuleError('STALE_STATE', 'The table changed before that action arrived. Try again.');
+    }
     if (action.type === 'STACK_ATTEMPT') {
       const key = `${room.code}:${player.id}:${action.discardGeneration}`;
       const previous = this.stackThrottle.get(key) ?? 0;
@@ -214,11 +223,18 @@ export class RoomManager {
     if (!room) return;
     const player = [...room.players, ...room.waiting].find((candidate) => candidate.id === playerId);
     if (!player) return;
+    const wasWaiting = room.waiting.some((candidate) => candidate.id === playerId);
     player.connected = false;
     room.disconnectGrace[player.id] = Date.now() + RECONNECT_GRACE_MS;
-    if (room.phase === 'lobby' && explicitLeave) {
+    // A waiting player has no active-game seat to preserve. Remove an explicit
+    // departure immediately so a disconnected ghost cannot be promoted later.
+    if (explicitLeave && wasWaiting) {
+      room.waiting = room.waiting.filter((candidate) => candidate.id !== player.id);
+      delete room.disconnectGrace[player.id];
+    } else if (room.phase === 'lobby' && explicitLeave) {
       room.players = room.players.filter((candidate) => candidate.id !== player.id);
       room.waiting = room.waiting.filter((candidate) => candidate.id !== player.id);
+      this.promoteWaiting(room);
     } else if (room.game && room.game.players.some((candidate) => candidate.id === player.id)) {
       room.game = applyGameCommand(room.game, { type: 'SET_CONNECTED', playerId, connected: false }, Date.now(), secureRandom).state;
     }
@@ -347,7 +363,13 @@ export class RoomManager {
       existing.name = name;
       existing.handle = identity.handle;
       delete room.disconnectGrace[existing.id];
-      const waiting = room.waiting.includes(existing);
+      let waiting = room.waiting.includes(existing);
+      if (waiting && room.phase === 'lobby' && room.players.length < 8) {
+        room.waiting = room.waiting.filter((candidate) => candidate.id !== existing.id);
+        existing.ready = false;
+        room.players.push(existing);
+        waiting = false;
+      }
       if (room.game?.players.some((candidate) => candidate.id === existing.id)) {
         room.game = applyGameCommand(room.game, { type: 'SET_CONNECTED', playerId: existing.id, connected: true }, Date.now(), secureRandom).state;
       }
@@ -416,6 +438,16 @@ export class RoomManager {
   private transferHost(room: RoomRuntime): void {
     const replacement = room.players.filter((player) => player.connected).sort((a, b) => a.joinedAt - b.joinedAt)[0];
     if (replacement) room.hostPlayerId = replacement.id;
+  }
+
+  private promoteWaiting(room: RoomRuntime): void {
+    while (room.players.length < 8) {
+      const nextIndex = room.waiting.findIndex((candidate) => candidate.connected);
+      if (nextIndex < 0) return;
+      const [candidate] = room.waiting.splice(nextIndex, 1);
+      candidate.ready = false;
+      room.players.push(candidate);
+    }
   }
 
   private async save(room: RoomRuntime): Promise<void> {

@@ -23,10 +23,13 @@ export function App() {
   const [notice, setNotice] = useState<ServerNotice>();
   const [fatal, setFatal] = useState<string>();
   const [profileReady, setProfileReady] = useState<boolean>();
+  const roomRef = useRef<RoomView | undefined>(undefined);
   const audio = useGameAudio();
   const audioRef = useRef(audio.playNotice);
   const pendingRoomActions = useRef(new Set<string>());
   const pendingGameActions = useRef(new Set<string>());
+  const noticePhase = useRef('home');
+  const currentNoticePhase = room ? `${room.phase}:${room.game?.phase ?? 'none'}` : 'home';
   useEffect(() => { audioRef.current = audio.playNotice; }, [audio.playNotice]);
 
   useEffect(() => {
@@ -38,22 +41,48 @@ export function App() {
   useEffect(() => {
     if (!session) return;
     const next = io(serverUrl, { auth: { token: session.token, visitorId: session.visitorId }, transports: ['websocket', 'polling'] });
-    next.on('connect', () => setConnected(true));
+    next.on('connect', () => { setConnected(true); setFatal(undefined); });
     next.on('disconnect', () => setConnected(false));
-    next.on('connect_error', (error) => setFatal(error.message));
+    next.on('connect_error', (error) => {
+      setConnected(false);
+      // Socket.IO keeps `active` true for recoverable transport failures. A
+      // rejected namespace/auth handshake is terminal and needs user action.
+      if (!next.active) setFatal(error.message);
+    });
     next.on('room:state', (state: RoomView) => {
+      roomRef.current = state;
       setRoom(state);
       const expectedPath = `/room/${state.code}`;
       if (window.location.pathname !== expectedPath) window.history.replaceState({}, '', expectedPath);
     });
-    next.on('notice', (value: ServerNotice) => {
-      setNotice(value);
+    next.on('room:left', ({ message }: { message: string }) => {
+      roomRef.current = undefined;
+      setRoom(undefined);
+      window.history.replaceState({}, '', '/');
+      const value: ServerNotice = { kind: 'error', message };
       audioRef.current(value);
+      setNotice(value);
+      window.setTimeout(() => setNotice((current) => current === value ? undefined : current), 3_500);
+    });
+    next.on('notice', (value: ServerNotice) => {
+      audioRef.current(value);
+      // Exact card movement is already shown on the table. Repeating the same
+      // sentence as a bottom toast covers the local hand on phones.
+      const hasLocalStackFeedback = (value.kind === 'stack' || value.kind === 'penalty') && value.playerId === roomRef.current?.selfPlayerId;
+      if (isInlineNotice(value) || hasLocalStackFeedback) return;
+      setNotice(value);
       window.setTimeout(() => setNotice((current) => current === value ? undefined : current), 3_500);
     });
     setSocket(next);
     return () => { next.disconnect(); };
   }, [session]);
+
+  useEffect(() => {
+    if (currentNoticePhase !== noticePhase.current) {
+      noticePhase.current = currentNoticePhase;
+      setNotice((current) => current?.kind === 'error' ? current : undefined);
+    }
+  }, [currentNoticePhase]);
 
   useEffect(() => {
     if (!session) return;
@@ -62,7 +91,11 @@ export function App() {
   }, [session]);
 
   const showActionError = useCallback((result: ActionAck) => {
-    if (!result.ok) setNotice({ kind: 'error', message: result.message ?? 'That action is not available.' });
+    if (!result.ok) {
+      const value: ServerNotice = { kind: 'error', message: result.message ?? 'That action is not available.' };
+      setNotice(value);
+      window.setTimeout(() => setNotice((current) => current === value ? undefined : current), 3_500);
+    }
     return result;
   }, []);
   const sendRoom = useCallback(async (input: RoomActionInput) => {
@@ -76,16 +109,24 @@ export function App() {
     }
   }, [showActionError, socket]);
   const sendGame = useCallback(async (input: GameActionInput) => {
-    if (!room?.game) return Promise.resolve<ActionAck>({ clientActionId: '', ok: false, message: 'No active game.' });
+    const currentGame = roomRef.current?.game;
+    if (!currentGame) return Promise.resolve<ActionAck>({ clientActionId: '', ok: false, message: 'No active game.' });
     const key = gameActionGroup(input.type);
     if (pendingGameActions.current.has(key)) return { clientActionId: 'pending', ok: false, code: 'ACTION_PENDING' };
     pendingGameActions.current.add(key);
     try {
-      return showActionError(await emitAction(socket, 'game:action', { ...input, clientActionId: nanoid(), expectedVersion: room.game.version }));
+      return showActionError(await emitAction(socket, 'game:action', { ...input, clientActionId: nanoid(), expectedVersion: currentGame.version }));
     } finally {
       pendingGameActions.current.delete(key);
     }
-  }, [room, showActionError, socket]);
+  }, [showActionError, socket]);
+  const leaveRoom = useCallback(async () => {
+    const result = await sendRoom({ type: 'ROOM_LEAVE' });
+    if (!result.ok) return;
+    roomRef.current = undefined;
+    setRoom(undefined);
+    window.history.replaceState({}, '', '/');
+  }, [sendRoom]);
 
   if (fatal) return <FatalScreen message={fatal} />;
   if (!session || !socket) return <LoadingScreen />;
@@ -93,18 +134,22 @@ export function App() {
   const profileMatch = window.location.pathname.match(/^\/u\/([a-z0-9_]+)$/);
   if (profileMatch && !room) return <PublicProfile handle={profileMatch[1]} onHome={() => { window.history.pushState({}, '', '/'); window.location.reload(); }} />;
 
+  const waitingPlayer = room?.waiting.find((player) => player.id === room.selfPlayerId);
+
   return (
     <div className="app-shell">
-      <TopBar connected={connected} session={session} audio={audio} compact={Boolean(room?.game)} forceProfile={!session.anonymous && profileReady === false} onProfileSaved={() => setProfileReady(true)} />
+      <TopBar connected={connected} session={session} audio={audio} compact={Boolean(room?.game && !waitingPlayer)} forceProfile={!session.anonymous && profileReady === false} onProfileSaved={() => setProfileReady(true)} onLeave={room ? leaveRoom : undefined} />
       <AnimatePresence mode="wait">
         {!room ? (
           <Landing key="landing" connected={connected} send={sendRoom} initialCode={roomCodeFromPath()} />
+        ) : waitingPlayer ? (
+          <WaitingRoom key="waiting" room={room} player={waitingPlayer} onLeave={() => void leaveRoom()} />
         ) : room.phase === 'lobby' ? (
           <Lobby key="lobby" room={room} send={sendRoom} />
         ) : room.game ? (
           <GameTable key="game" room={room} send={sendGame} sendRoom={sendRoom} />
         ) : (
-          <LoadingScreen key="waiting" label="Waiting for the next lobby…" />
+          <LoadingScreen key="room-loading" label="Restoring the table…" />
         )}
       </AnimatePresence>
       <AnimatePresence>{notice && <Toast notice={notice} />}</AnimatePresence>
@@ -112,7 +157,30 @@ export function App() {
   );
 }
 
-function TopBar({ connected, session, audio, compact, forceProfile, onProfileSaved }: { connected: boolean; session: ClientSession; audio: ReturnType<typeof useGameAudio>; compact: boolean; forceProfile: boolean; onProfileSaved: () => void }) {
+function WaitingRoom({ room, player, onLeave }: { room: RoomView; player: RoomPlayerView; onLeave: () => void }) {
+  const position = room.waiting.findIndex((candidate) => candidate.id === player.id) + 1;
+  const roundActive = room.phase !== 'lobby';
+  return (
+    <motion.main className="waiting-page page" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+      <section className="waiting-card glass" aria-labelledby="waiting-title">
+        <div className="waiting-orbit" aria-hidden="true"><span>{position}</span></div>
+        <p className="eyebrow">Room {room.code}</p>
+        <h1 id="waiting-title">{roundActive ? 'Round in progress.' : 'Table is full.'}</h1>
+        <p>{roundActive ? 'You’re next in line. Keep this tab open and Cambrio will move you into the lobby when the round ends.' : 'You’re next in line. If a seat opens before the deal, Cambrio will move you in automatically.'}</p>
+        <div className="queue-status" role="status" aria-live="polite">
+          <span><b>#{position}</b> in queue</span>
+          <span><b>{room.players.length}</b> at the table</span>
+        </div>
+        <div className="seated-preview" aria-label="Players currently at the table">
+          {room.players.map((seated) => <span key={seated.id} title={seated.name}>{seated.name.slice(0, 2).toUpperCase()}</span>)}
+        </div>
+        <button className="secondary leave-queue" onClick={onLeave}>Leave queue</button>
+      </section>
+    </motion.main>
+  );
+}
+
+function TopBar({ connected, session, audio, compact, forceProfile, onProfileSaved, onLeave }: { connected: boolean; session: ClientSession; audio: ReturnType<typeof useGameAudio>; compact: boolean; forceProfile: boolean; onProfileSaved: () => void; onLeave?: () => void }) {
   const [open, setOpen] = useState(false);
   return (
     <header className={`topbar ${compact ? 'game-topbar' : ''}`}>
@@ -123,7 +191,7 @@ function TopBar({ connected, session, audio, compact, forceProfile, onProfileSav
         <button className={`icon-button ${audio.settings.ambience ? 'active' : ''}`} onClick={audio.toggleAmbience} aria-label="Toggle ambience"><Waves size={17} /></button>
         <button className="profile-chip" onClick={() => setOpen(true)}><UserRound size={15} /><span>{session.anonymous ? 'Guest' : session.session?.user.email?.split('@')[0] ?? 'Profile'}</span></button>
       </div>
-      <AnimatePresence>{(open || forceProfile) && <AccountPanel session={session} close={() => setOpen(false)} force={forceProfile} onSaved={onProfileSaved} />}</AnimatePresence>
+      <AnimatePresence>{(open || forceProfile) && <AccountPanel session={session} close={() => setOpen(false)} force={forceProfile} onSaved={onProfileSaved} onLeave={onLeave} />}</AnimatePresence>
     </header>
   );
 }
@@ -161,12 +229,12 @@ function Landing({ connected, send, initialCode }: { connected: boolean; send: (
         <h2>{initialCode ? 'Join this table' : 'Take a seat'}</h2>
         <label>Your display name<input name="displayName" autoComplete="name" value={name} maxLength={20} onChange={(event) => setName(event.target.value)} placeholder="What should friends call you?" /></label>
         {initialCode ? (
-          <button className="primary wide" disabled={busy || name.trim().length < 2} onClick={() => void submit('join')}>Join room <ArrowRight size={17} /></button>
+          <button className="primary wide" disabled={!connected || busy || name.trim().length < 2} onClick={() => void submit('join')}>Join room <ArrowRight size={17} /></button>
         ) : (
           <>
-            <button className="primary wide" disabled={busy || name.trim().length < 2} onClick={() => void submit('create')}>Create private room <ArrowRight size={17} /></button>
+            <button className="primary wide" disabled={!connected || busy || name.trim().length < 2} onClick={() => void submit('create')}>Create private room <ArrowRight size={17} /></button>
             <div className="or"><span>or join with a code</span></div>
-            <div className="code-row"><input name="roomCode" aria-label="Room code" className="code-input" value={code} maxLength={8} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="ABCD2345" /><button disabled={busy || code.length !== 8 || name.trim().length < 2} onClick={() => void submit('join')}>Join</button></div>
+            <div className="code-row"><input name="roomCode" aria-label="Room code" className="code-input" value={code} maxLength={8} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="ABCD2345" /><button disabled={!connected || busy || code.length !== 8 || name.trim().length < 2} onClick={() => void submit('join')}>Join</button></div>
           </>
         )}
         {error && <p className="form-error">{error}</p>}
@@ -207,7 +275,6 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
   const game = room.game!;
   const self = game.players.find((player) => player.id === room.selfPlayerId)!;
   const [revealVisible, setRevealVisible] = useState(false);
-  const [inspectedKing, setInspectedKing] = useState(false);
   const [stackFeedback, setStackFeedback] = useState<{ cardId: string; kind: StackFeedback }>();
   const [tableCue, setTableCue] = useState<TableCue>();
   const feedbackTimer = useRef<number | undefined>(undefined);
@@ -254,22 +321,22 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
   useEffect(() => {
     if (!revealKey || game.power?.status !== 'revealing') {
       setRevealVisible(false);
-      setInspectedKing(false);
       return;
     }
     let finished = false;
     setRevealVisible(true);
-    setInspectedKing(false);
     const finish = () => {
       if (finished) return;
       finished = true;
       setRevealVisible(false);
-      if (game.power?.kind === 'black_king') setInspectedKing(true);
+      if (game.power?.kind === 'black_king') void sendRef.current({ type: 'POWER_CONCEAL' });
       else void sendRef.current({ type: 'POWER_COMPLETE' });
     };
     const timer = window.setTimeout(finish, 1_700);
+    const concealWhenHidden = () => { if (document.hidden) finish(); };
     window.addEventListener('blur', finish);
-    return () => { window.clearTimeout(timer); window.removeEventListener('blur', finish); };
+    document.addEventListener('visibilitychange', concealWhenHidden);
+    return () => { window.clearTimeout(timer); window.removeEventListener('blur', finish); document.removeEventListener('visibilitychange', concealWhenHidden); };
   // revealKey represents a new server-approved private reveal.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealKey]);
@@ -286,7 +353,6 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
   const canRiskStack = self.cards.length > 0 && self.cards.length < MAX_HAND_CARDS;
   const stackReady = game.stackOpen && canRiskStack && !transferring && !selectingPower;
   const stackBlockedByLimit = game.stackOpen && self.cards.length >= MAX_HAND_CARDS && !transferring && !selectingPower;
-  const endingPlayer = game.ending ? game.players.find((player) => player.id === game.ending?.triggerPlayerId) : undefined;
 
   const attemptStack = async (card: CardView) => {
     if (stackFeedback?.kind === 'trying') return;
@@ -320,8 +386,6 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
     <LayoutGroup id={`table-${game.id}`}>
     <motion.main className={`game-page ${stackReady ? 'stack-mode' : ''}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="game-status"><span className="room-pill" data-short={room.code.slice(0, 2)}>{room.code}</span><TurnBanner game={game} self={self} /><Countdown deadline={game.deadlineAt} /></div>
-      {game.ending && <div className="ending-banner"><strong>{game.ending.reason === 'cambio' ? 'CAMBRIO CALLED' : 'ZERO CARDS'}</strong><span>{endingPlayer?.name ? `${endingPlayer.name} · ` : ''}{game.ending.turnsRemaining === 0 ? 'Final turn' : `${game.ending.turnsRemaining} ${game.ending.turnsRemaining === 1 ? 'turn' : 'turns'} after this one`}</span></div>}
-
       <section className="opponent-rail" aria-label="Other players" style={{ '--opponent-count': Math.max(1, opponents.length) } as CSSProperties}>
         {opponents.map((opponent) => <PlayerHand key={opponent.id} player={opponent} compact canInteract={() => canInteract(opponent)} highlight={() => isContextTarget(opponent)} selectedCards={power?.targets} arrivingSlots={flightSlots(tableCue, opponent.id)} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, opponent)} active={game.activePlayerId === opponent.id} />)}
       </section>
@@ -341,7 +405,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
       <AnimatePresence>{stackFeedback && stackFeedback.kind !== 'trying' && <motion.div className={`stack-result ${stackFeedback.kind}`} initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, y: -8 }}>{stackFeedback.kind === 'correct' ? 'MATCH — STACKED' : stackFeedback.kind === 'wrong' ? 'NO MATCH — PENALTY CARD' : 'STACK ALREADY TAKEN'}</motion.div>}</AnimatePresence>
       <AnimatePresence>{tableCue && <SwapFlightLayer key={`flight-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
       <AnimatePresence>{tableCue && tableCue.kind !== 'stack' && <TableActionCue key={`cue-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
-      <InteractionOverlay game={game} self={self} revealVisible={revealVisible} inspectedKing={inspectedKing} send={send} />
+      <InteractionOverlay game={game} self={self} revealVisible={revealVisible} send={send} />
     </motion.main>
     </LayoutGroup>
   );
@@ -350,22 +414,48 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
 function InitialPeek({ game, self, send }: { game: GameView; self: PlayerView; send: (action: GameActionInput) => Promise<ActionAck> }) {
   const [holding, setHolding] = useState(false);
   const holdingRef = useRef(false);
-  const begin = () => {
-    if (self.initialPeekComplete) return;
-    vibrate(8);
-    holdingRef.current = true;
-    setHolding(true);
-    void send({ type: 'INITIAL_PEEK_START' });
-  };
-  const end = useCallback(() => {
-    if (!holdingRef.current) return;
+  const startedRef = useRef(false);
+  const startingRef = useRef(false);
+  const releaseRequestedRef = useRef(false);
+  const finish = useCallback(() => {
     holdingRef.current = false;
     setHolding(false);
+    if (startingRef.current && !startedRef.current) {
+      releaseRequestedRef.current = true;
+      return;
+    }
+    if (!startedRef.current) return;
+    startedRef.current = false;
+    releaseRequestedRef.current = false;
     void send({ type: 'INITIAL_PEEK_END' });
   }, [send]);
+  const begin = () => {
+    if (self.initialPeekComplete || startingRef.current || startedRef.current) return;
+    vibrate(8);
+    holdingRef.current = true;
+    releaseRequestedRef.current = false;
+    startingRef.current = true;
+    setHolding(true);
+    void send({ type: 'INITIAL_PEEK_START' }).then((result) => {
+      startingRef.current = false;
+      if (!result.ok) {
+        holdingRef.current = false;
+        setHolding(false);
+        return;
+      }
+      startedRef.current = true;
+      if (releaseRequestedRef.current) finish();
+    });
+  };
+  const end = useCallback(() => {
+    if (!holdingRef.current && !startingRef.current) return;
+    finish();
+  }, [finish]);
   useEffect(() => {
+    const concealWhenHidden = () => { if (document.hidden) end(); };
     window.addEventListener('blur', end);
-    return () => window.removeEventListener('blur', end);
+    document.addEventListener('visibilitychange', concealWhenHidden);
+    return () => { window.removeEventListener('blur', end); document.removeEventListener('visibilitychange', concealWhenHidden); };
   }, [end]);
   return (
     <main className="peek-screen">
@@ -377,14 +467,15 @@ function InitialPeek({ game, self, send }: { game: GameView; self: PlayerView; s
   );
 }
 
-function InteractionOverlay({ game, self, revealVisible, inspectedKing, send }: { game: GameView; self: PlayerView; revealVisible: boolean; inspectedKing: boolean; send: (action: GameActionInput) => Promise<ActionAck> }) {
+function InteractionOverlay({ game, self, revealVisible, send }: { game: GameView; self: PlayerView; revealVisible: boolean; send: (action: GameActionInput) => Promise<ActionAck> }) {
   if (game.transfer?.fromPlayerId === self.id) return <div className="interaction-prompt"><span className="ability-chip"><GameGlyph kind="gift" />STACK REWARD</span><strong>Tap one of your cards to give away</strong></div>;
   const power = game.power;
   if (!power || game.activePlayerId !== self.id) return null;
   if (power.status === 'offered') return <div className="interaction-prompt"><span className="ability-chip"><GameGlyph kind={powerGlyph(power.kind)} />{powerName(power.kind)}</span><strong>{powerDescription(power.kind)}</strong><button className="text-button" onClick={() => void send({ type: 'POWER_DECLINE' })}>Skip ability</button></div>;
   if (power.status === 'selecting') return <div className="interaction-prompt"><span className="ability-chip"><GameGlyph kind={powerGlyph(power.kind)} />{powerName(power.kind)}</span><strong>{powerTargetInstruction(power.kind, power.targets.length, self.cards.length)}</strong><button className="text-button" onClick={() => void send({ type: 'POWER_DECLINE' })}>Skip ability</button></div>;
   const blackKing = power.kind === 'black_king';
-  return <div className={`interaction-prompt power-prompt ${revealVisible ? 'is-revealing' : ''}`}><span className="ability-chip"><GameGlyph kind={powerGlyph(power.kind)} />{blackKing ? 'BLACK KING' : powerName(power.kind)}</span>{!inspectedKing ? <div className="reveal-status"><GameGlyph kind="peek" /><strong>Memorize {blackKing ? 'both cards' : 'this card'}</strong><span className="reveal-progress" /></div> : <div className="power-choice"><strong>Swap positions?</strong><button className="primary" disabled={power.targets.length < 2} onClick={() => void send({ type: 'POWER_COMPLETE', swap: true })}><GameGlyph kind="swap" />Swap</button><button onClick={() => void send({ type: 'POWER_COMPLETE', swap: false })}>Keep</button></div>}</div>;
+  const choosing = blackKing && power.status === 'choosing';
+  return <div className={`interaction-prompt power-prompt ${revealVisible ? 'is-revealing' : ''}`}><span className="ability-chip"><GameGlyph kind={powerGlyph(power.kind)} />{blackKing ? 'BLACK KING' : powerName(power.kind)}</span>{!choosing ? <div className="reveal-status"><GameGlyph kind="peek" /><strong>Memorize {blackKing ? 'both cards' : 'this card'}</strong><span className="reveal-progress" /></div> : <div className="power-choice"><strong>Swap positions?</strong><button className="primary" disabled={power.targets.length < 2} onClick={() => void send({ type: 'POWER_COMPLETE', swap: true })}><GameGlyph kind="swap" />Swap</button><button onClick={() => void send({ type: 'POWER_COMPLETE', swap: false })}>Keep</button></div>}</div>;
 }
 
 function Results({ room, game, sendRoom }: { room: RoomView; game: GameView; sendRoom: (action: RoomActionInput) => Promise<ActionAck> }) {
@@ -450,7 +541,7 @@ function locationRect(location: TableLocation): DOMRect | undefined {
 }
 
 function TableActionCue({ cue }: { cue: TableCue }) {
-  return <motion.div className={`table-action-cue ${cue.kind}`} initial={{ opacity: 0, y: 10, scale: .94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, transition: { duration: .12 } }} transition={{ delay: .42, duration: .18 }}>
+  return <motion.div className={`table-action-cue ${cue.kind}`} role="status" aria-live="polite" initial={{ opacity: 0, y: 10, scale: .94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, transition: { duration: .12 } }} transition={{ delay: .42, duration: .18 }}>
     <span className="cue-cards" aria-hidden="true"><i /><i /></span>
     <span><strong>{cue.title}</strong><small>{cue.from} <b>{cue.kind === 'exchange' ? '↔' : '→'}</b> {cue.to}</small></span>
   </motion.div>;
@@ -488,8 +579,9 @@ export function Card({ card, faceDown = false, interactive = false, mini = false
 
 function TurnBanner({ game, self }: { game: GameView; self: PlayerView }) {
   const active = game.players.find((player) => player.id === game.activePlayerId);
+  const endingPlayer = game.ending ? game.players.find((player) => player.id === game.ending!.triggerPlayerId) : undefined;
   if (game.transfer) return <div className="turn-banner"><strong>Card transfer</strong><span>Finish the successful stack</span></div>;
-  return <div className={`turn-banner ${active?.id === self.id ? 'your-turn' : ''}`}><strong>{active?.id === self.id ? 'Your turn' : `${active?.name ?? 'Player'}'s turn`}</strong><span>{game.turnStage === 'awaiting_draw' ? 'Draw from the deck' : game.turnStage === 'deciding' ? 'Discard or swap' : 'Resolving a power'}</span></div>;
+  return <div className={`turn-banner ${active?.id === self.id ? 'your-turn' : ''} ${game.ending ? 'ending-turn' : ''}`}>{game.ending && <span className="ending-state" role="status" aria-live="assertive"><CambrioGlyph decorative compact /><b>{game.ending.reason === 'cambio' ? 'CAMBRIO CALLED' : 'ZERO CARDS'}</b></span>}<strong>{active?.id === self.id ? 'Your turn' : `${active?.name ?? 'Player'}'s turn`}</strong><span>{game.ending ? `${endingPlayer?.name ?? 'Player'} · ${game.ending.turnsRemaining === 0 ? 'final turn' : `${game.ending.turnsRemaining} ${game.ending.turnsRemaining === 1 ? 'turn' : 'turns'} after this one`}` : game.turnStage === 'awaiting_draw' ? 'Draw from the deck' : game.turnStage === 'deciding' ? 'Discard or swap' : 'Resolving a power'}</span></div>;
 }
 
 function Countdown({ deadline }: { deadline?: number }) {
@@ -498,17 +590,24 @@ function Countdown({ deadline }: { deadline?: number }) {
   return <span className={`countdown ${seconds <= 10 ? 'urgent' : ''}`}>{seconds}s</span>;
 }
 
-function AccountPanel({ session, close, force = false, onSaved }: { session: ClientSession; close: () => void; force?: boolean; onSaved?: () => void }) {
+function AccountPanel({ session, close, force = false, onSaved, onLeave }: { session: ClientSession; close: () => void; force?: boolean; onSaved?: () => void; onLeave?: () => void }) {
   const [email, setEmail] = useState('');
   const [handle, setHandle] = useState('');
   const [displayName, setDisplayName] = useState(() => localStorage.getItem('cambrio:name') ?? '');
   const [message, setMessage] = useState('');
+  const [confirmLeave, setConfirmLeave] = useState(false);
   const permanent = !session.anonymous;
+  useEffect(() => {
+    if (force) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [close, force]);
   const authHeaders = { 'Content-Type': 'application/json', ...(session.token ? { Authorization: `Bearer ${session.token}` } : {}), 'x-visitor-id': session.visitorId };
   const google = async () => { const supabase = await getSupabase(); if (!supabase) return setMessage('Connect Supabase to enable accounts.'); const { error } = session.anonymous ? await supabase.auth.linkIdentity({ provider: 'google', options: { redirectTo: window.location.href } }) : await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.href } }); if (error) setMessage(error.message); };
   const emailLink = async () => { const supabase = await getSupabase(); if (!supabase) return setMessage('Connect Supabase to enable accounts.'); const { error } = session.anonymous ? await supabase.auth.updateUser({ email }) : await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } }); setMessage(error ? error.message : 'Check your email to finish linking your account.'); };
   const saveProfile = async () => { const response = await fetch('/api/me/profile', { method: 'PUT', headers: authHeaders, body: JSON.stringify({ handle, displayName }) }); const body = await response.json(); setMessage(response.ok ? 'Profile saved.' : body.error); if (response.ok) onSaved?.(); };
-  return <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={() => !force && close()}><motion.section className="account-panel glass" initial={{ y: 18 }} animate={{ y: 0 }} onMouseDown={(event) => event.stopPropagation()}>{!force && <button className="modal-close" onClick={close}>×</button>}<p className="eyebrow">Player identity</p><h2>{permanent ? force ? 'Choose your player handle' : 'Your Cambrio profile' : 'Save your wins'}</h2>{!permanent ? <><p>Keep playing as a guest, or link this guest to an account. Wins already earned on this browser will come with you.</p><button className="google-button" onClick={() => void google()}>Continue with Google</button><div className="or"><span>or use email</span></div><div className="email-row"><input name="email" autoComplete="email" value={email} type="email" placeholder="you@example.com" onChange={(event) => setEmail(event.target.value)} /><button onClick={() => void emailLink()}>Send link</button></div></> : <><p>Your unique handle creates your shareable public profile.</p><label>Public handle<input name="handle" autoComplete="username" value={handle} onChange={(event) => setHandle(event.target.value.toLowerCase())} placeholder="card_shark" /></label><label>Display name<input name="displayName" autoComplete="name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label><button className="primary wide" disabled={handle.length < 3 || displayName.trim().length < 2} onClick={() => void saveProfile()}>Save public profile</button></>}{message && <p className="panel-message">{message}</p>}</motion.section></motion.div>;
+  return <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={() => !force && close()}><motion.section className="account-panel glass" role="dialog" aria-modal="true" aria-labelledby="account-title" initial={{ y: 18 }} animate={{ y: 0 }} onMouseDown={(event) => event.stopPropagation()}>{!force && <button className="modal-close" aria-label="Close player panel" onClick={close}>×</button>}<p className="eyebrow">Player identity</p><h2 id="account-title">{permanent ? force ? 'Choose your player handle' : 'Your Cambrio profile' : 'Save your wins'}</h2>{!permanent ? <><p>Keep playing as a guest, or link this guest to an account. Wins already earned on this browser will come with you.</p><button className="google-button" onClick={() => void google()}>Continue with Google</button><div className="or"><span>or use email</span></div><div className="email-row"><input name="email" autoComplete="email" value={email} type="email" placeholder="you@example.com" onChange={(event) => setEmail(event.target.value)} /><button onClick={() => void emailLink()}>Send link</button></div></> : <><p>Your unique handle creates your shareable public profile.</p><label>Public handle<input name="handle" autoComplete="username" value={handle} onChange={(event) => setHandle(event.target.value.toLowerCase())} placeholder="card_shark" /></label><label>Display name<input name="displayName" autoComplete="name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label><button className="primary wide" disabled={handle.length < 3 || displayName.trim().length < 2} onClick={() => void saveProfile()}>Save public profile</button></>}{message && <p className="panel-message">{message}</p>}{onLeave && !force && <div className={`leave-table ${confirmLeave ? 'confirming' : ''}`}>{confirmLeave ? <><span><strong>Leave this table?</strong><small>You can rejoin later with the room link.</small></span><button onClick={() => setConfirmLeave(false)}>Stay</button><button className="danger" onClick={() => { close(); onLeave(); }}>Leave</button></> : <button className="leave-table-button" onClick={() => setConfirmLeave(true)}>Leave table</button>}</div>}</motion.section></motion.div>;
 }
 
 function PublicProfile({ handle, onHome }: { handle: string; onHome: () => void }) {
@@ -519,6 +618,14 @@ function PublicProfile({ handle, onHome }: { handle: string; onHome: () => void 
 }
 
 function Toast({ notice }: { notice: ServerNotice }) { return <motion.div className={`toast ${notice.kind}`} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }}><span>{notice.kind === 'penalty' ? '!' : notice.kind === 'stack' ? '✓' : '•'}</span>{notice.message}</motion.div>; }
+function isInlineNotice(notice: ServerNotice): boolean {
+  return notice.message === 'The cards are dealt. Hold your two bottom cards to peek.'
+    || notice.message === 'Back in the lobby. Ready up for another round.'
+    || notice.kind === 'cambio'
+    || /^(Blind swap|Black King) · /.test(notice.message)
+    || / swapped the draw into /.test(notice.message)
+    || / gave a hidden card to /.test(notice.message);
+}
 function LoadingScreen({ label = 'Preparing the table…' }: { label?: string }) { return <main className="loading-screen"><div className="loader-cards"><i /><i /><i /></div><p>{label}</p></main>; }
 function FatalScreen({ message }: { message: string }) { return <main className="loading-screen"><div className="fatal-mark">!</div><h1>Couldn’t reach the table</h1><p>{message}</p><button onClick={() => window.location.reload()}>Try again</button></main>; }
 
