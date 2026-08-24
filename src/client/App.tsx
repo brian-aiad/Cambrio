@@ -1,6 +1,6 @@
 import { AnimatePresence, LayoutGroup, motion } from 'framer-motion';
 import { ArrowRight, Check, Copy, Link2, UserRound, Volume2, VolumeX, Waves, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { nanoid } from 'nanoid';
@@ -217,7 +217,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
 
   useEffect(() => () => { window.clearTimeout(feedbackTimer.current); window.clearTimeout(cueTimer.current); }, []);
   useEffect(() => { sendRef.current = send; }, [send]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const current = snapshotTable(game);
     const previous = motionSnapshot.current;
     motionSnapshot.current = current;
@@ -228,21 +228,25 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
     });
     let cue: TableCue | undefined;
     if (moved.length >= 2) {
-      const [cardId, destination] = moved[0];
-      const source = previous.locations.get(cardId)!;
-      cue = { kind: 'exchange', title: previous.powerKind === 'black_king' ? 'Black King swap' : 'Blind swap', from: `${source.playerName} ${slotTag(source.slot)}`, to: `${destination.playerName} ${slotTag(destination.slot)}` };
+      const movements = moved.slice(0, 2).map(([cardId, destination]) => ({ cardId, from: previous.locations.get(cardId)!, to: destination }));
+      cue = { id: game.version, kind: 'exchange', title: previous.powerKind === 'black_king' ? 'Black King swap' : 'Blind swap', movements, from: locationLabel(movements[0].from), to: locationLabel(movements[0].to) };
     } else if (moved.length === 1) {
       const [cardId, destination] = moved[0];
       const source = previous.locations.get(cardId)!;
-      cue = { kind: 'transfer', title: 'Card transfer', from: `${source.playerName} ${slotTag(source.slot)}`, to: `${destination.playerName} ${slotTag(destination.slot)}` };
-    } else if (!previous.stackOpen && current.discardId && current.discardId !== previous.discardId) {
+      const movements = [{ cardId, from: source, to: destination }];
+      cue = { id: game.version, kind: 'transfer', title: 'Card transfer', movements, from: locationLabel(source), to: locationLabel(destination) };
+    } else if (current.discardId && current.discardId !== previous.discardId) {
       const source = previous.locations.get(current.discardId);
-      if (source) cue = { kind: 'discard', title: previous.stackOpen ? 'Card stacked' : 'Card swapped', from: `${source.playerName} ${slotTag(source.slot)}`, to: 'Discard' };
+      if (source) {
+        const kind = previous.stackOpen ? 'stack' : 'discard';
+        const discard: TableLocation = { zone: 'discard' };
+        cue = { id: game.version, kind, title: kind === 'stack' ? 'Card stacked' : 'Card swapped', movements: [{ cardId: current.discardId, from: source, to: discard, face: game.discard }], from: locationLabel(source), to: 'Discard' };
+      }
     }
     if (!cue) return;
     setTableCue(cue);
     window.clearTimeout(cueTimer.current);
-    cueTimer.current = window.setTimeout(() => setTableCue(undefined), 1_650);
+    cueTimer.current = window.setTimeout(() => setTableCue(undefined), cue.kind === 'exchange' ? 2_100 : 1_650);
   // A new authoritative game version is the animation trigger.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.version]);
@@ -319,12 +323,12 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
       {game.ending && <div className="ending-banner"><strong>{game.ending.reason === 'cambio' ? 'CAMBRIO CALLED' : 'ZERO CARDS'}</strong><span>{endingPlayer?.name ? `${endingPlayer.name} · ` : ''}{game.ending.turnsRemaining === 0 ? 'Final turn' : `${game.ending.turnsRemaining} ${game.ending.turnsRemaining === 1 ? 'turn' : 'turns'} after this one`}</span></div>}
 
       <section className="opponent-rail" aria-label="Other players" style={{ '--opponent-count': Math.max(1, opponents.length) } as CSSProperties}>
-        {opponents.map((opponent) => <PlayerHand key={opponent.id} player={opponent} compact canInteract={() => canInteract(opponent)} highlight={() => isContextTarget(opponent)} selectedCards={power?.targets} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, opponent)} active={game.activePlayerId === opponent.id} />)}
+        {opponents.map((opponent) => <PlayerHand key={opponent.id} player={opponent} compact canInteract={() => canInteract(opponent)} highlight={() => isContextTarget(opponent)} selectedCards={power?.targets} arrivingSlots={flightSlots(tableCue, opponent.id)} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, opponent)} active={game.activePlayerId === opponent.id} />)}
       </section>
 
       <section className="table-center">
         <div className="pile-zone">
-          <div className="pile"><Card card={game.discard} faceDown={!game.discard} /><span>{game.discard ? 'DISCARD' : 'EMPTY'}</span></div>
+          <div className={`pile ${tableCue?.movements.some((movement) => movement.to.zone === 'discard') ? 'receiving-flight' : ''}`} data-table-zone="discard"><Card card={game.discard} faceDown={!game.discard} /><span>{game.discard ? 'DISCARD' : 'EMPTY'}</span></div>
           <button className={`deck-card ${isTurn && game.turnStage === 'awaiting_draw' ? 'draw-ready' : ''}`} disabled={!isTurn || game.turnStage !== 'awaiting_draw' || Boolean(game.transfer)} onClick={() => { vibrate(10); void send({ type: 'DRAW' }); }} title={`Draw from deck; ${game.deckCount} cards remain`}><CardBackMark /><small>{game.deckCount}</small></button>
         </div>
         <AnimatePresence mode="wait">
@@ -332,10 +336,11 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
         </AnimatePresence>
       </section>
 
-      <section className="self-zone"><PlayerHand player={self} canInteract={() => canInteract(self)} highlight={() => isContextTarget(self)} selectedCards={power?.targets} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, self)} active={isTurn} /><span className="you-label">YOU · {self.cards.length ? `${self.cards.length}/${MAX_HAND_CARDS} CARDS` : 'OUT'}</span></section>
+      <section className="self-zone"><PlayerHand player={self} canInteract={() => canInteract(self)} highlight={() => isContextTarget(self)} selectedCards={power?.targets} arrivingSlots={flightSlots(tableCue, self.id)} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, self)} active={isTurn} /><span className="you-label">YOU · {self.cards.length ? `${self.cards.length}/${MAX_HAND_CARDS} CARDS` : 'OUT'}</span></section>
       <div className="game-actions">{!game.ending && <button className="cambio-button" onClick={() => { vibrate(24); void send({ type: 'CALL_CAMBIO' }); }}><GameGlyph kind="cambio" />Call Cambrio</button>}</div>
       <AnimatePresence>{stackFeedback && stackFeedback.kind !== 'trying' && <motion.div className={`stack-result ${stackFeedback.kind}`} initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, y: -8 }}>{stackFeedback.kind === 'correct' ? 'MATCH — STACKED' : stackFeedback.kind === 'wrong' ? 'NO MATCH — PENALTY CARD' : 'STACK ALREADY TAKEN'}</motion.div>}</AnimatePresence>
-      <AnimatePresence>{tableCue && <TableActionCue cue={tableCue} />}</AnimatePresence>
+      <AnimatePresence>{tableCue && <SwapFlightLayer key={`flight-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
+      <AnimatePresence>{tableCue && tableCue.kind !== 'stack' && <TableActionCue key={`cue-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
       <InteractionOverlay game={game} self={self} revealVisible={revealVisible} inspectedKing={inspectedKing} send={send} />
     </motion.main>
     </LayoutGroup>
@@ -390,26 +395,68 @@ function Results({ room, game, sendRoom }: { room: RoomView; game: GameView; sen
 }
 
 type StackFeedback = 'trying' | 'correct' | 'wrong' | 'closed';
-type TableCue = { kind: 'exchange' | 'transfer' | 'discard'; title: string; from: string; to: string };
-type TableSnapshot = { locations: Map<string, { playerId: string; playerName: string; slot: number }>; discardId?: string; powerKind?: PowerKind; stackOpen: boolean };
+type HandLocation = { zone: 'hand'; playerId: string; playerName: string; slot: number };
+type TableLocation = HandLocation | { zone: 'discard' };
+type TableMovement = { cardId: string; from: TableLocation; to: TableLocation; face?: CardView };
+type TableCue = { id: number; kind: 'exchange' | 'transfer' | 'discard' | 'stack'; title: string; from: string; to: string; movements: TableMovement[] };
+type TableSnapshot = { locations: Map<string, HandLocation>; discardId?: string; powerKind?: PowerKind; stackOpen: boolean };
 
 function snapshotTable(game: GameView): TableSnapshot {
   return {
-    locations: new Map(game.players.flatMap((player) => player.cards.map((card) => [card.id, { playerId: player.id, playerName: player.name, slot: card.slot }] as const))),
+    locations: new Map(game.players.flatMap((player) => player.cards.map((card) => [card.id, { zone: 'hand', playerId: player.id, playerName: player.name, slot: card.slot }] as const))),
     discardId: game.discard?.id,
     powerKind: game.power?.kind,
     stackOpen: game.stackOpen,
   };
 }
 
+function locationLabel(location: TableLocation): string {
+  return location.zone === 'discard' ? 'Discard' : `${location.playerName} ${slotTag(location.slot)}`;
+}
+
+function flightSlots(cue: TableCue | undefined, playerId: string): number[] {
+  return cue?.movements.flatMap((movement) => movement.to.zone === 'hand' && movement.to.playerId === playerId ? [movement.to.slot] : []) ?? [];
+}
+
+type FlightGeometry = { cardId: string; from: DOMRect; to: DOMRect; fromLabel: string; toLabel: string; face?: CardView };
+
+function SwapFlightLayer({ cue }: { cue: TableCue }) {
+  const [flights, setFlights] = useState<FlightGeometry[]>([]);
+  useLayoutEffect(() => {
+    const measured = cue.movements.flatMap((movement) => {
+      const from = locationRect(movement.from);
+      const to = locationRect(movement.to);
+      return from && to ? [{ cardId: movement.cardId, from, to, fromLabel: locationLabel(movement.from), toLabel: locationLabel(movement.to), face: movement.face }] : [];
+    });
+    setFlights(measured);
+  }, [cue]);
+  if (!flights.length) return null;
+  return <motion.div className={`swap-flight-layer ${cue.kind}`} initial={{ opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true">
+    {flights.map((flight, index) => {
+      const middleLeft = (flight.from.left + flight.to.left) / 2 + (index === 0 ? -16 : 16);
+      const middleTop = (flight.from.top + flight.to.top) / 2 + (index === 0 ? -34 : 34);
+      return <motion.span key={flight.cardId} className={`card-flight flight-${index + 1}`} data-flight-card={flight.cardId}
+        initial={{ left: flight.from.left, top: flight.from.top, width: flight.from.width, height: flight.from.height, rotate: index === 0 ? -2 : 2, scale: 1 }}
+        animate={{ left: [flight.from.left, middleLeft, flight.to.left], top: [flight.from.top, middleTop, flight.to.top], width: [flight.from.width, Math.max(30, (flight.from.width + flight.to.width) / 2), flight.to.width], height: [flight.from.height, Math.max(42, (flight.from.height + flight.to.height) / 2), flight.to.height], rotate: index === 0 ? [-2, -8, 0] : [2, 8, 0], scale: [1, 1.08, 1] }}
+        transition={{ duration: 1.12, times: [0, .5, 1], ease: [0.22, 1, 0.36, 1] }}><span className="flight-surface flight-back"><CardBackMark /></span>{flight.face?.rank && flight.face.suit && <span className="flight-surface flight-front"><strong>{flight.face.rank}</strong><SuitMark suit={flight.face.suit} /></span>}<b>{index + 1}</b></motion.span>;
+    })}
+    {flights.map((flight) => <motion.span key={`endpoint-${flight.cardId}`} className="flight-endpoint" style={{ left: flight.from.left, top: flight.from.top, width: flight.from.width, height: flight.from.height }} initial={{ opacity: 0, scale: .86 }} animate={{ opacity: [0, 1, 1, 0], scale: [0.86, 1.07, 1.02, 1] }} transition={{ duration: 1.3, times: [0, .12, .72, 1] }}><em>{flight.fromLabel}</em></motion.span>)}
+  </motion.div>;
+}
+
+function locationRect(location: TableLocation): DOMRect | undefined {
+  if (location.zone === 'discard') return document.querySelector<HTMLElement>('[data-table-zone="discard"] .playing-card')?.getBoundingClientRect();
+  return document.querySelector<HTMLElement>(`.hand-slot[data-player-id="${location.playerId}"][data-slot="${location.slot}"]`)?.getBoundingClientRect();
+}
+
 function TableActionCue({ cue }: { cue: TableCue }) {
-  return <motion.div className={`table-action-cue ${cue.kind}`} initial={{ opacity: 0, y: 10, scale: .94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8 }}>
+  return <motion.div className={`table-action-cue ${cue.kind}`} initial={{ opacity: 0, y: 10, scale: .94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, transition: { duration: .12 } }} transition={{ delay: .42, duration: .18 }}>
     <span className="cue-cards" aria-hidden="true"><i /><i /></span>
     <span><strong>{cue.title}</strong><small>{cue.from} <b>{cue.kind === 'exchange' ? '↔' : '→'}</b> {cue.to}</small></span>
   </motion.div>;
 }
 
-function PlayerHand({ player, compact = false, canInteract, highlight, selectedCards = [], feedback, reveal = false, active = false, onCard }: { player: PlayerView; compact?: boolean; canInteract?: (card: CardView) => boolean; highlight?: (card: CardView) => boolean; selectedCards?: string[]; feedback?: { cardId: string; kind: StackFeedback }; reveal?: boolean; active?: boolean; onCard: (card: CardView) => void }) {
+function PlayerHand({ player, compact = false, canInteract, highlight, selectedCards = [], arrivingSlots = [], feedback, reveal = false, active = false, onCard }: { player: PlayerView; compact?: boolean; canInteract?: (card: CardView) => boolean; highlight?: (card: CardView) => boolean; selectedCards?: string[]; arrivingSlots?: number[]; feedback?: { cardId: string; kind: StackFeedback }; reveal?: boolean; active?: boolean; onCard: (card: CardView) => void }) {
   const highestSlot = player.cards.reduce((highest, card) => Math.max(highest, card.slot), 3);
   const slotCount = Math.max(4, highestSlot + 1);
   const cardsBySlot = new Map(player.cards.map((card) => [card.slot, card]));
@@ -418,7 +465,7 @@ function PlayerHand({ player, compact = false, canInteract, highlight, selectedC
     <div className="hand-cards" aria-label={`${player.name}'s cards`}>
       {Array.from({ length: slotCount }, (_, slot) => {
         const card = cardsBySlot.get(slot);
-        return <div className={`hand-slot ${card ? '' : 'vacant'}`} key={slot} data-position={slotTag(slot)}>{card ? <Card card={card} faceDown={!reveal} positioned slot={slot} targetOption={highlight?.(card)} selected={selectedCards.includes(card.id)} feedback={feedback?.cardId === card.id ? feedback.kind : undefined} interactive={canInteract?.(card)} onClick={() => onCard(card)} /> : <span className="vacant-marker" aria-hidden="true" />}</div>;
+        return <div className={`hand-slot ${card ? '' : 'vacant'} ${arrivingSlots.includes(slot) ? 'flight-receiving' : ''}`} key={slot} data-player-id={player.id} data-slot={slot} data-position={slotTag(slot)}>{card ? <Card card={card} faceDown={!reveal} positioned slot={slot} targetOption={highlight?.(card)} selected={selectedCards.includes(card.id)} feedback={feedback?.cardId === card.id ? feedback.kind : undefined} interactive={canInteract?.(card)} onClick={() => onCard(card)} /> : <span className="vacant-marker" aria-hidden="true" />}</div>;
       })}
       {player.cards.length === 0 && <div className="out-badge">OUT</div>}
     </div>
@@ -432,7 +479,7 @@ export function Card({ card, faceDown = false, interactive = false, mini = false
   const description = !card ? 'Empty discard pile' : hidden ? `${actualSlot === undefined || actualSlot < 0 ? 'Hidden' : slotName(actualSlot)} card${interactive ? '; tap to select' : ''}` : `${card.rank} of ${card.suit}${interactive ? '; tap to select' : ''}`;
   return <motion.button data-card-id={card?.id} data-slot={actualSlot} layout="position" layoutId={card ? `card-${card.id}` : undefined} initial={{ opacity: 0, y: hidden ? -8 : 0, scale: .96 }} title={description} aria-label={description} className={`playing-card ${hidden ? 'face-down' : ''} ${red ? 'red' : ''} ${interactive ? 'interactive' : ''} ${targetOption ? 'target-option' : ''} ${mini ? 'mini' : ''} ${positioned ? 'positioned' : ''} ${selected ? 'selected' : ''} ${feedback ? `stack-${feedback}` : ''} ${!card ? 'empty' : ''}`} disabled={!interactive} onClick={onClick} animate={feedback === 'wrong' ? { opacity: 1, y: 0, x: [0, -7, 7, -5, 5, 0], rotate: [0, -1.4, 1.4, -.8, .8, 0] } : feedback === 'correct' ? { opacity: 1, y: 0, scale: [1, 1.08, 1] } : { opacity: 1, y: 0, scale: 1 }} transition={feedback ? { duration: .38, ease: 'easeOut' } : { layout: { type: 'spring', stiffness: 190, damping: 23, mass: .9 }, opacity: { duration: .16 } }} whileHover={interactive ? { y: -3 } : undefined} whileTap={interactive ? { scale: .96 } : undefined}>
     <AnimatePresence initial={false} mode="popLayout">
-      {hidden ? <motion.span key="back" className="card-surface card-reverse" initial={{ opacity: 0, rotateY: -88 }} animate={{ opacity: 1, rotateY: 0 }} exit={{ opacity: 0, rotateY: 88 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><CardBackMark /></motion.span> : <motion.span key="front" className="card-surface card-front" initial={{ opacity: 0, rotateY: 88 }} animate={{ opacity: 1, rotateY: 0 }} exit={{ opacity: 0, rotateY: -88 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><span className="corner">{card!.rank}<small>{suitGlyph(card!.suit)}</small></span><span className="suit">{suitGlyph(card!.suit)}</span></motion.span>}
+      {hidden ? <motion.span key="back" className="card-surface card-reverse" initial={{ opacity: 0, rotateY: -88 }} animate={{ opacity: 1, rotateY: 0 }} exit={{ opacity: 0, rotateY: 88 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><CardBackMark /></motion.span> : <motion.span key="front" className="card-surface card-front" initial={{ opacity: 0, rotateY: 88 }} animate={{ opacity: 1, rotateY: 0 }} exit={{ opacity: 0, rotateY: -88 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><span className="corner" data-rank={card!.rank}><b>{card!.rank}</b><SuitMark suit={card!.suit!} /></span><SuitMark suit={card!.suit!} className="center-suit" /></motion.span>}
     </AnimatePresence>
     {positioned && actualSlot !== undefined && <span className="slot-tag">{slotTag(actualSlot)}</span>}
     {label && <em>{label}</em>}
@@ -520,7 +567,14 @@ function emitAction(socket: ClientSocket | undefined, event: 'room:action' | 'ga
 }
 
 function roomCodeFromPath(): string | undefined { return window.location.pathname.match(/^\/room\/([A-HJ-NP-Z2-9]{8})$/i)?.[1]?.toUpperCase(); }
-function suitGlyph(suit?: CardView['suit']): string { return suit === 'hearts' ? '♥' : suit === 'diamonds' ? '♦' : suit === 'clubs' ? '♣' : '♠'; }
+function SuitMark({ suit, className = '' }: { suit: NonNullable<CardView['suit']>; className?: string }) {
+  return <svg className={`suit-mark ${className}`} viewBox="0 0 24 24" aria-hidden="true">
+    {suit === 'hearts' && <path d="M12 21.2 10.5 19.8C5.4 15.2 2 12.1 2 8.3 2 5.2 4.4 2.8 7.5 2.8c1.8 0 3.5.8 4.5 2.1 1-1.3 2.7-2.1 4.5-2.1 3.1 0 5.5 2.4 5.5 5.5 0 3.8-3.4 6.9-8.5 11.5L12 21.2Z" />}
+    {suit === 'diamonds' && <path d="M12 1.7 20.5 12 12 22.3 3.5 12 12 1.7Z" />}
+    {suit === 'clubs' && <><circle cx="12" cy="7" r="4.6" /><circle cx="7.2" cy="13" r="4.6" /><circle cx="16.8" cy="13" r="4.6" /><path d="M10.2 14.4c.2 3.3-.8 5.6-3.1 7.8h9.8c-2.3-2.2-3.3-4.5-3.1-7.8h-3.6Z" /></>}
+    {suit === 'spades' && <path d="M12 1.7C10 5.1 3.7 9 3.7 14.2c0 3 2.2 5.3 5.1 5.3 1.1 0 2.1-.4 2.9-1.1-.3 1.6-1.1 2.7-2.5 3.9h5.6c-1.4-1.2-2.2-2.3-2.5-3.9.8.7 1.8 1.1 2.9 1.1 2.9 0 5.1-2.3 5.1-5.3C20.3 9 14 5.1 12 1.7Z" />}
+  </svg>;
+}
 function slotName(slot: number): string { return slot === 0 ? 'top left' : slot === 1 ? 'top right' : slot === 2 ? 'bottom left' : slot === 3 ? 'bottom right' : `extra slot ${slot - 3}`; }
 function slotTag(slot: number): string { return slot === 0 ? 'TL' : slot === 1 ? 'TR' : slot === 2 ? 'BL' : slot === 3 ? 'BR' : `+${slot - 3}`; }
 function isEligiblePowerTarget(power: PowerKind, selected: number, ownerId: string, selfId: string, ownCount: number): boolean {

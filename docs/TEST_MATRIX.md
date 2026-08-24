@@ -39,7 +39,7 @@ Seven opponent grids and the local grid were checked at these viewport sizes:
 
 The production landing page scores 100 for Accessibility, Best Practices, and SEO in the throttled Lighthouse mobile profile, with zero cumulative layout shift. Performance is 82 with zero total blocking time; the remaining score cost is initial JavaScript transfer for realtime, auth, and motion support.
 
-The deterministic Playwright harness captures 46 state/device combinations: every power phase, draw and stack decisions, transfer and ending states, results, zero/six-card hands, all player counts from 2–8, four viewport classes, and a gallery of all 52 card faces. Focused browser assertions additionally verify automatic peek concealment, exact-slot blind and Black King movement, correct/wrong stack feedback, stable penalty placement, and mutually exclusive decision surfaces.
+The deterministic Playwright harness captures 47 state/device combinations: the initial BL/BR hold-to-peek, every power phase, draw and stack decisions, transfer and ending states, results, zero/six-card hands, all player counts from 2–8, four viewport classes, and a gallery of all 52 card faces. Focused browser assertions additionally verify all 52 vector suit faces and mini result cards, corner/center suit geometry, automatic peek concealment, exact-slot two-card Jack/Queen and Black King flights, responsive long-distance eight-player exchanges, face-up hand-to-discard motion, correct/wrong stack feedback, stable penalty placement, and mutually exclusive decision surfaces.
 
 ## Release commands
 

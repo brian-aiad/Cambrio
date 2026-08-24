@@ -26,10 +26,22 @@ const action = async (socket, event, payload, expectedVersion = 0) => {
   return ack;
 };
 
-const waitState = (socket, predicate) => new Promise((resolve, reject) => {
+const waitState = (socket, label, predicate) => new Promise((resolve, reject) => {
   const current = latest.get(socket.id);
   if (current && predicate(current)) return resolve(current);
-  const timer = setTimeout(() => { socket.off('room:state', listener); reject(new Error('State timeout')); }, 10_000);
+  const timer = setTimeout(() => {
+    socket.off('room:state', listener);
+    const last = latest.get(socket.id);
+    reject(new Error(`State timeout waiting for ${label}; last=${JSON.stringify({
+      phase: last?.game?.phase,
+      stage: last?.game?.turnStage,
+      version: last?.game?.version,
+      players: last?.players?.length,
+      deckCount: last?.game?.deckCount,
+      activePlayerId: last?.game?.activePlayerId,
+      selfPlayerId: last?.selfPlayerId,
+    })}`));
+  }, 10_000);
   const listener = (room) => {
     if (!predicate(room)) return;
     clearTimeout(timer);
@@ -42,20 +54,20 @@ const waitState = (socket, predicate) => new Promise((resolve, reject) => {
 try {
   const [host, guest] = await Promise.all([connect('spam-host'), connect('spam-guest')]);
   await action(host, 'room:action', { type: 'ROOM_CREATE', name: 'Spam Host' });
-  const created = await waitState(host, (room) => room.players?.length === 1);
+  const created = await waitState(host, 'created room', (room) => room.players?.length === 1);
   await action(guest, 'room:action', { type: 'ROOM_JOIN', code: created.code, name: 'Spam Guest' });
   await action(guest, 'room:action', { type: 'ROOM_READY', ready: true });
   await action(host, 'room:action', { type: 'ROOM_START' });
-  await waitState(host, (room) => room.game?.phase === 'initial_peek');
+  await waitState(host, 'initial peek', (room) => room.game?.phase === 'initial_peek');
 
   for (const socket of [host, guest]) {
     let room = latest.get(socket.id);
     await action(socket, 'game:action', { type: 'INITIAL_PEEK_START' }, room.game.version);
-    room = await waitState(socket, (value) => value.game?.players.find((player) => player.id === value.selfPlayerId)?.cards.filter((card) => card.rank).length === 2);
+    room = await waitState(socket, 'two private initial cards', (value) => value.game?.players.find((player) => player.id === value.selfPlayerId)?.cards.filter((card) => card.rank).length === 2);
     await action(socket, 'game:action', { type: 'INITIAL_PEEK_END' }, room.game.version);
   }
 
-  const playing = await waitState(host, (room) => room.game?.phase === 'playing');
+  const playing = await waitState(host, 'playing phase', (room) => room.game?.phase === 'playing');
   const activeSocket = playing.game.activePlayerId === playing.selfPlayerId ? host : guest;
   const observer = activeSocket === host ? guest : host;
   const activeView = latest.get(activeSocket.id);
@@ -64,7 +76,7 @@ try {
   const duplicateDraw = { type: 'DRAW', clientActionId: randomUUID(), expectedVersion: beforeVersion };
 
   const drawAcks = await Promise.all(Array.from({ length: 25 }, () => emitAck(activeSocket, 'game:action', duplicateDraw)));
-  const afterDraw = await waitState(observer, (room) => room.game?.turnStage === 'deciding' && room.game?.deckCount === beforeDeck - 1);
+  const afterDraw = await waitState(observer, 'one coalesced draw', (room) => room.game?.turnStage === 'deciding' && room.game?.deckCount === beforeDeck - 1);
   if (!drawAcks.every((ack) => ack?.ok)) throw new Error('Concurrent duplicate draw did not return consistent acknowledgements.');
 
   const discardAcks = await Promise.all(Array.from({ length: 25 }, () => emitAck(activeSocket, 'game:action', {
@@ -72,17 +84,25 @@ try {
     clientActionId: randomUUID(),
     expectedVersion: afterDraw.game.version,
   })));
-  const afterDiscard = await waitState(observer, (room) => room.game?.discard && room.game.activePlayerId !== afterDraw.game.activePlayerId);
+  const afterDiscard = await waitState(observer, 'one accepted discard', (room) => room.game?.discard && room.game.version > afterDraw.game.version && room.game.deckCount === beforeDeck - 1);
   const successfulDiscards = discardAcks.filter((ack) => ack?.ok).length;
   if (successfulDiscards !== 1) throw new Error(`Expected one successful discard from unique-button spam, received ${successfulDiscards}.`);
   if (afterDiscard.game.deckCount !== beforeDeck - 1) throw new Error('Button spam drew more than one card.');
+
+  // A randomly drawn 7–Q or black King legitimately opens a power stage. Resolve it
+  // before checking the next turn so this stress test is independent of deck order.
+  if (afterDiscard.game.turnStage === 'power') {
+    const activePowerView = latest.get(activeSocket.id);
+    await action(activeSocket, 'game:action', { type: 'POWER_DECLINE' }, activePowerView.game.version);
+  }
+  await waitState(observer, 'next turn after the accepted discard', (room) => room.game?.activePlayerId !== afterDraw.game.activePlayerId);
 
   await new Promise((resolve) => setTimeout(resolve, 10_100));
   const caller = observer;
   const callerView = latest.get(caller.id);
   const duplicateCambio = { type: 'CALL_CAMBIO', clientActionId: randomUUID(), expectedVersion: callerView.game.version };
   const cambioAcks = await Promise.all(Array.from({ length: 20 }, () => emitAck(caller, 'game:action', duplicateCambio)));
-  const ending = await waitState(caller, (room) => Boolean(room.game?.ending));
+  const ending = await waitState(caller, 'one coalesced Cambrio call', (room) => Boolean(room.game?.ending));
   if (!cambioAcks.every((ack) => ack?.ok)) throw new Error('Concurrent duplicate Cambrio calls did not coalesce.');
   if (ending.game.ending.triggerPlayerId !== ending.selfPlayerId) throw new Error('The wrong player became the Cambrio caller.');
 

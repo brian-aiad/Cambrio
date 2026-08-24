@@ -66,6 +66,7 @@ function makeRoom(scene: string, playerCount: number): RoomView {
     game.stackOpen = false;
     game.turnStage = 'power';
     game.power = power;
+    game.discard = powerDiscard(power.kind);
     for (const targetId of power.status === 'revealing' ? power.targets : []) revealTarget(players, targetId);
   }
   if (scene === 'transfer') {
@@ -94,13 +95,25 @@ function makeRoom(scene: string, playerCount: number): RoomView {
   };
 }
 
+function powerDiscard(kind: PowerKind): CardView {
+  return kind === 'own_peek' ? faceCard('discard-7', -1, '7', 'diamonds')
+    : kind === 'opponent_peek' ? faceCard('discard-10', -1, '10', 'hearts')
+      : kind === 'blind_swap' ? faceCard('discard-q', -1, 'Q', 'hearts')
+        : faceCard('discard-black-king', -1, 'K', 'spades');
+}
+
 function applyAuditAction(room: RoomView, action: { type: string; targetCardId?: string; swap?: boolean }, scene: string): { room: RoomView; outcome?: ActionAck['outcome'] } {
   const next = structuredClone(room);
   const game = next.game!;
   const self = game.players.find((player) => player.id === next.selfPlayerId)!;
   const followingPlayer = game.players.find((player) => player.id !== self.id)?.id ?? self.id;
 
-  if (action.type === 'DRAW' && game.turnStage === 'awaiting_draw') {
+  if (action.type === 'INITIAL_PEEK_START' && game.phase === 'initial_peek') {
+    self.cards = self.cards.map((card) => card.slot >= 2 ? faceCard(card.id, card.slot, card.slot === 2 ? '3' : '9', card.slot === 2 ? 'clubs' : 'hearts') : card);
+  } else if (action.type === 'INITIAL_PEEK_END' && game.phase === 'initial_peek') {
+    self.cards = self.cards.map((card) => ({ id: card.id, slot: card.slot }));
+    self.initialPeekComplete = true;
+  } else if (action.type === 'DRAW' && game.turnStage === 'awaiting_draw') {
     game.stackOpen = false;
     game.turnStage = 'deciding';
     game.drawnCard = faceCard('audit-drawn', -1, '10', 'hearts');

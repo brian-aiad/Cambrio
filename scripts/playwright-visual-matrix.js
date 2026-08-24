@@ -12,7 +12,7 @@ async (page) => {
   };
 
   const coreScenes = [
-    'awaiting', 'drawn', 'own-select', 'own-reveal', 'opponent-select',
+    'initial', 'awaiting', 'drawn', 'own-select', 'own-reveal', 'opponent-select',
     'opponent-reveal', 'blind-own', 'blind-opponent', 'black-own',
     'black-opponent', 'black-reveal', 'transfer', 'ending', 'six', 'zero', 'results',
   ];

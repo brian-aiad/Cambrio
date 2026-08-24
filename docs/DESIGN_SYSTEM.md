@@ -14,6 +14,8 @@ Cambrio should feel like a focused native card game, not a themed casino page. T
 
 The custom Cambrio mark is a pair of offset cards connected by opposing arrows: a hand changes, but position and memory remain. It deliberately avoids a generic letter monogram. The mark and game-action symbols are inline SVG so they remain crisp and color-consistent at every device scale. Lucide is limited to familiar utility controls such as sound, copy, close, and profile.
 
+Card faces also use code-native SVG suit marks rather than operating-system suit glyphs. This keeps Hearts, Diamonds, Clubs, and Spades crisp and correctly proportioned from a compressed eight-player rail through the full-size local hand. Ranks use a restrained card-face type treatment so Q, 10, and the other crowded corners remain immediately legible.
+
 ## Spatial memory
 
 - Starting slots are always TL, TR, BL, BR. Removing or replacing a card never moves the other identities.
@@ -33,6 +35,8 @@ The custom Cambrio mark is a pair of offset cards connected by opposing arrows: 
 ## Motion and feedback
 
 - A card identity keeps a shared layout identity while moving between slots and piles; the animation communicates the state change instead of decorating it.
+- Blind swaps and Black King exchanges animate two numbered, face-down cards between their exact player and slot endpoints. Both destinations remain empty until the crossing cards arrive, so there is no ambiguous duplicate state.
+- A normal hand replacement and a successful stack animate from the exact source slot to discard. The travelling card turns face-up before arrival, making the public card change observable to every player.
 - Correct stack: selected card lifts/scales, travels to discard, success cue remains long enough to read.
 - Wrong stack: selected card shakes in place, penalty occupies the next stable slot, and an explicit penalty cue remains visible for 1.5 seconds.
 - Drawn cards enter from the deck side; prompt surfaces use short spring transitions without bounce-heavy staging.

@@ -106,19 +106,31 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  const actionTimes: number[] = [];
-  const rateLimited = () => {
+  const packetTimes: number[] = [];
+  const actionTimes = new Map<string, number>();
+  const packetRateLimited = () => {
     const now = Date.now();
-    while (actionTimes.length && actionTimes[0] < now - 10_000) actionTimes.shift();
-    actionTimes.push(now);
-    return actionTimes.length > 40;
+    while (packetTimes.length && packetTimes[0] < now - 10_000) packetTimes.shift();
+    packetTimes.push(now);
+    return packetTimes.length > 200;
+  };
+  const rateLimited = (clientActionId: string) => {
+    const now = Date.now();
+    for (const [id, receivedAt] of actionTimes) {
+      if (receivedAt < now - 10_000) actionTimes.delete(id);
+    }
+    // Idempotent retries share one clientActionId and are one logical decision.
+    // A connection still cannot bypass the limit by sending unique IDs.
+    if (!actionTimes.has(clientActionId)) actionTimes.set(clientActionId, now);
+    return actionTimes.size > 40;
   };
   socket.on('room:action', async (payload, ack) => {
     let clientActionId = 'unknown';
     try {
-      if (rateLimited()) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
+      if (packetRateLimited()) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
       const action = roomActionSchema.parse(payload);
       clientActionId = action.clientActionId;
+      if (rateLimited(clientActionId)) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
       const previousMembership = socket.data.membership;
       const result = await rooms.handleRoomAction(socket.data.identity, previousMembership, action);
       if (previousMembership && previousMembership.roomCode !== result.membership?.roomCode) socket.leave(roomChannel(previousMembership.roomCode));
@@ -135,9 +147,10 @@ io.on('connection', (socket) => {
   socket.on('game:action', async (payload, ack) => {
     let clientActionId = 'unknown';
     try {
-      if (rateLimited()) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
+      if (packetRateLimited()) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
       const action = gameActionSchema.parse(payload);
       clientActionId = action.clientActionId;
+      if (rateLimited(clientActionId)) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
       const result = await rooms.handleGameAction(socket.data.membership, action);
       const outcome = result.effects?.find((effect) => effect.type === 'stack' || effect.type === 'penalty')?.type;
       ack?.({ clientActionId, ok: true, outcome });
