@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyGameCommand, createGame, type GameCommand, type GameState, type PowerKind } from './game.js';
+import { applyGameCommand, createGame, MAX_HAND_CARDS, projectGame, type GameCommand, type GameState, type PowerKind } from './game.js';
 
 function seeded(seed: number) {
   let value = seed >>> 0;
@@ -25,10 +25,44 @@ function assertCardInvariant(state: GameState) {
   expect(new Set(locations)).toHaveLength(52);
   expect(Object.keys(state.cards)).toHaveLength(52);
   for (const id of locations) expect(state.cards[id]).toBeDefined();
+  for (const player of state.players) {
+    expect(player.cards.length).toBeLessThanOrEqual(MAX_HAND_CARDS);
+    expect(Object.keys(player.cardSlots).sort()).toEqual([...player.cards].sort());
+    expect(new Set(Object.values(player.cardSlots)).size).toBe(player.cards.length);
+    for (const slot of Object.values(player.cardSlots)) expect(Number.isInteger(slot) && slot >= 0).toBe(true);
+  }
   if (state.turn) expect(state.players.find((player) => player.id === state.turn?.playerId)?.forfeited).toBe(false);
   if (state.transfer) {
     expect(state.players.find((player) => player.id === state.transfer?.fromPlayerId)?.cards.length).toBeGreaterThan(0);
     expect(state.transfer.fromPlayerId).not.toBe(state.transfer.toPlayerId);
+  }
+}
+
+function assertProjectionInvariant(state: GameState) {
+  const invariant = (condition: boolean, message: string) => {
+    if (!condition) throw new Error(`Projection invariant failed in ${state.id} v${state.version}: ${message}`);
+  };
+  for (const viewer of state.players) {
+    const view = projectGame(state, viewer.id);
+    const revealed = new Set(state.temporaryReveals[viewer.id] ?? []);
+    const results = state.phase === 'results';
+    for (const player of view.players) {
+      const enginePlayer = state.players.find((candidate) => candidate.id === player.id)!;
+      const expectedIds = [...enginePlayer.cards].sort((first, second) => enginePlayer.cardSlots[first] - enginePlayer.cardSlots[second]);
+      invariant(player.cards.map((card) => card.id).join('|') === expectedIds.join('|'), `${viewer.id} received moved or missing card identities`);
+      for (const card of player.cards) {
+        const shouldBeVisible = results || revealed.has(card.id);
+        invariant((card.rank !== undefined) === shouldBeVisible, `${viewer.id} rank visibility was wrong for ${card.id}`);
+        invariant((card.suit !== undefined) === shouldBeVisible, `${viewer.id} suit visibility was wrong for ${card.id}`);
+        invariant(card.slot === enginePlayer.cardSlots[card.id], `${viewer.id} received the wrong slot for ${card.id}`);
+      }
+    }
+    invariant(Boolean(view.drawnCard) === Boolean(state.turn?.drawnCardId && state.turn.playerId === viewer.id), `${viewer.id} drawn-card privacy was wrong`);
+    invariant(Boolean(view.power) === Boolean(state.turn?.power && state.turn.playerId === viewer.id), `${viewer.id} power privacy was wrong`);
+    invariant(Boolean(view.transfer) === Boolean(state.transfer && state.transfer.fromPlayerId === viewer.id), `${viewer.id} transfer privacy was wrong`);
+    if (view.discard) {
+      invariant(view.discard.rank !== undefined && view.discard.suit !== undefined, 'the public discard was hidden');
+    }
   }
 }
 
@@ -60,7 +94,7 @@ function powerCommand(state: GameState, random: () => number): GameCommand {
 
 function possibleStack(state: GameState, random: () => number): GameCommand | undefined {
   if (!state.stackOpen || state.transfer || !state.discard.length) return undefined;
-  const actors = state.players.filter((player) => !player.forfeited && player.cards.length);
+  const actors = state.players.filter((player) => !player.forfeited && player.cards.length > 0 && player.cards.length < MAX_HAND_CARDS);
   if (!actors.length) return undefined;
   const actor = choose(actors, random);
   const allTargets = state.players.filter((player) => !player.forfeited).flatMap((player) => player.cards);
@@ -78,12 +112,15 @@ function simulate(seed: number, playerCount: number): GameState {
   let state = createGame(`stress-${seed}`, participants, 1_000, random);
   for (const player of [...state.players]) {
     state = applyGameCommand(state, { type: 'INITIAL_PEEK_START', playerId: player.id }, 1_000, random).state;
+    assertProjectionInvariant(state);
     state = applyGameCommand(state, { type: 'INITIAL_PEEK_END', playerId: player.id }, 1_001, random).state;
+    assertProjectionInvariant(state);
   }
   let actions = 0;
   let called = false;
   while (state.phase !== 'results' && actions < 1_000) {
     assertCardInvariant(state);
+    assertProjectionInvariant(state);
     let command: GameCommand;
     if (state.transfer) {
       const from = state.players.find((player) => player.id === state.transfer?.fromPlayerId)!;
@@ -105,11 +142,13 @@ function simulate(seed: number, playerCount: number): GameState {
       }
     }
     state = applyGameCommand(state, command, 2_000 + actions, random).state;
+    assertProjectionInvariant(state);
     actions += 1;
   }
   expect(actions).toBeLessThan(1_000);
   expect(state.phase).toBe('results');
   assertCardInvariant(state);
+  assertProjectionInvariant(state);
   expect(state.results?.filter((result) => result.winner).length).toBeGreaterThanOrEqual(1);
   return state;
 }
@@ -123,5 +162,72 @@ describe('randomized game stress', () => {
     }
     expect(completed).toBe(350);
   }, 30_000);
-});
 
+  it('settles 1,000 competing stack races with one winner and stable slots', () => {
+    for (let seed = 1; seed <= 1_000; seed += 1) {
+      const random = seeded(seed * 17);
+      const playerCount = 2 + (seed % 7);
+      const participants = Array.from({ length: playerCount }, (_, index) => ({ id: `p${index}`, userId: `u${index}`, name: `Player ${index}` }));
+      let state = createGame(`race-${seed}`, participants, 1_000, random);
+      for (const player of [...state.players]) {
+        state = applyGameCommand(state, { type: 'INITIAL_PEEK_START', playerId: player.id }, 1_000, random).state;
+        state = applyGameCommand(state, { type: 'INITIAL_PEEK_END', playerId: player.id }, 1_001, random).state;
+      }
+
+      const activeId = state.turn!.playerId;
+      const matchingTarget = state.players.flatMap((player) => player.cards).find((target) => state.deck.some((id) => state.cards[id].rank === state.cards[target].rank))!;
+      const owner = state.players.find((player) => player.cards.includes(matchingTarget))!;
+      const matchingDraw = state.deck.find((id) => state.cards[id].rank === state.cards[matchingTarget].rank)!;
+      const deckIndex = state.deck.indexOf(matchingDraw);
+      [state.deck[deckIndex], state.deck[state.deck.length - 1]] = [state.deck.at(-1)!, matchingDraw];
+      state = applyGameCommand(state, { type: 'DRAW', playerId: activeId }, 2_000, random).state;
+      state = applyGameCommand(state, { type: 'DISCARD_DRAWN', playerId: activeId }, 2_001, random).state;
+      const generation = state.discardGeneration;
+      const stacker = seed % 2 === 0 ? owner : state.players.find((player) => player.id !== owner.id)!;
+      const success = applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: stacker.id, targetCardId: matchingTarget, discardGeneration: generation }, 2_002, random);
+      state = success.state;
+      expect(success.effects.filter((effect) => effect.type === 'stack')).toHaveLength(1);
+      expect(state.stackOpen).toBe(false);
+      if (state.transfer) {
+        const giver = state.players.find((player) => player.id === state.transfer!.fromPlayerId)!;
+        state = applyGameCommand(state, { type: 'TRANSFER_CARD', playerId: giver.id, cardId: giver.cards[0] }, 2_003, random).state;
+      }
+      const staleActor = state.players.find((player) => player.cards.length)!;
+      const staleTarget = state.players.flatMap((player) => player.cards)[0];
+      expect(() => applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: staleActor.id, targetCardId: staleTarget, discardGeneration: generation }, 2_004, random)).toThrow();
+      assertCardInvariant(state);
+    }
+  }, 20_000);
+
+  it('survives 750 wrong-then-correct stack gambles without moving remembered cards', () => {
+    for (let seed = 1; seed <= 750; seed += 1) {
+      const random = seeded(seed * 31);
+      const participants = Array.from({ length: 2 + (seed % 5) }, (_, index) => ({ id: `p${index}`, userId: `u${index}`, name: `Player ${index}` }));
+      let state = createGame(`gamble-${seed}`, participants, 1_000, random);
+      for (const player of [...state.players]) {
+        state = applyGameCommand(state, { type: 'INITIAL_PEEK_START', playerId: player.id }, 1_000, random).state;
+        state = applyGameCommand(state, { type: 'INITIAL_PEEK_END', playerId: player.id }, 1_001, random).state;
+      }
+      const activeId = state.turn!.playerId;
+      const actor = state.players.find((player) => player.id !== activeId)!;
+      const beforeSlots = { ...actor.cardSlots };
+      const wrongTarget = actor.cards[0];
+      const forcedDraw = state.deck.find((id) => state.cards[id].rank !== state.cards[wrongTarget].rank && state.players.flatMap((player) => player.cards).some((target) => state.cards[target].rank === state.cards[id].rank))!;
+      const deckIndex = state.deck.indexOf(forcedDraw);
+      [state.deck[deckIndex], state.deck[state.deck.length - 1]] = [state.deck.at(-1)!, forcedDraw];
+      state = applyGameCommand(state, { type: 'DRAW', playerId: activeId }, 2_000, random).state;
+      state = applyGameCommand(state, { type: 'DISCARD_DRAWN', playerId: activeId }, 2_001, random).state;
+      const wrong = applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: actor.id, targetCardId: wrongTarget, discardGeneration: state.discardGeneration }, 2_002, random);
+      state = wrong.state;
+      expect(wrong.effects.some((effect) => effect.type === 'penalty')).toBe(true);
+      expect(state.stackOpen).toBe(true);
+      for (const [cardId, slot] of Object.entries(beforeSlots)) expect(state.players.find((player) => player.id === actor.id)!.cardSlots[cardId]).toBe(slot);
+      const topRank = state.cards[state.discard.at(-1)!].rank;
+      const correctTarget = state.players.flatMap((player) => player.cards).find((id) => state.cards[id].rank === topRank)!;
+      const correct = applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: actor.id, targetCardId: correctTarget, discardGeneration: state.discardGeneration }, 2_003, random);
+      state = correct.state;
+      expect(correct.effects.some((effect) => effect.type === 'stack')).toBe(true);
+      assertCardInvariant(state);
+    }
+  }, 20_000);
+});

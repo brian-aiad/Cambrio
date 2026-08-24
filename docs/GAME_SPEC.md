@@ -8,7 +8,8 @@ This document is authoritative. If UI copy or animation conflicts with this spec
 - Use one 52-card deck without Jokers. Ace is worth 1; 2–10 use face value; J, Q, and black Kings are worth 10; red Kings are worth −1.
 - Deal four hidden cards to each player. The discard pile starts empty. Each player may hold to inspect their two bottom cards once, then confirms readiness.
 - Every turn draws privately from the deck. The player either discards the drawn card or replaces one owned card with it; the replaced card becomes the discard.
-- A hand is an ordered, variable-length collection. Penalties can grow it and stacks can shrink it.
+- A hand is a variable-length collection of stable spatial slots. The starting cards occupy top-left, top-right, bottom-left, and bottom-right. Existing cards never reflow when another card leaves; a vacant slot stays visible. A drawn replacement inherits the replaced card's slot, swaps exchange card identities without moving either table position, and a penalty or gift uses the first open slot.
+- A player may own at most six cards. A wrong stack may take a player from five to six cards. At six cards, that player cannot initiate another stack attempt until their hand falls below the limit; this prevents penalty-free guess spam.
 
 ## Optional powers
 
@@ -21,16 +22,23 @@ Only a card drawn from the deck and immediately discarded offers its power. Repl
 | Jack or Queen | Blindly swap one owned card and one opponent card. |
 | Black King | Inspect one owned and one opponent card together, then optionally swap them. |
 
-Every power may be declined. With zero cards, 9/10 remains usable and a black King may inspect one opponent card but cannot swap; other powers have no legal effect.
+Every power enters target selection immediately after the power card is discarded. Only legal cards are highlighted, and the acting player may choose **Skip ability**. There is no separate use-power confirmation. With zero cards, 9/10 remains usable and a black King may inspect one opponent card but cannot swap; other powers have no legal effect.
 
 ## Stacking
 
 - A normal discard opens one stack race until a later normal discard or one successful stack.
-- Any player with at least one owned card, including the discarder, may arm Stack and target any table card. Matching uses rank only.
+- Any player with at least one owned card, including the discarder, may tap any table card directly while the stack window is open. There is no separate Stack-mode button. Matching uses rank only.
 - The first valid request received by the authoritative server wins. A wrong target stays with its owner and the guesser receives one unseen penalty card. The guesser may retry and receives another penalty for each miss.
 - A successful card is discarded, closes the race, does not activate a power, and cannot be chained.
 - If the stacked card belonged to another player, the stacker must give that player any one of their own remaining cards. The transfer is hidden and mandatory.
 - Stacking stays live during powers and does not cancel an already-offered power.
+
+## Board interaction contract
+
+- Every starting hand renders as a fixed 2×2 spatial grid with short TL/TR/BL/BR labels. Penalties never reflow those four positions: the local fifth/sixth cards extend as +1/+2 in a third column on the right, while compact opponent grids retain the same labeled starting geometry and add stable numbered slots when necessary.
+- Context determines a single tap without extra modal steps: a highlighted owned slot replaces a drawn card; a highlighted power target selects it; a mandatory gift chooses the card to transfer; otherwise a tap during an open race attempts a stack.
+- Card identity is animated continuously when it moves between deck, hand, opponent, and discard. A correct stack travels to the discard and shows a success cue. A wrong stack shakes in place, shows a failure cue, and animates the unseen penalty into the guesser's next slot.
+- Private reveals require a press-and-hold gesture. Releasing or moving the app out of focus conceals the cards. Black King shows both selected cards together, then presents only **Swap cards** and **Keep positions**.
 
 ## Ending and scoring
 
@@ -48,4 +56,3 @@ Every power may be declined. With zero cards, 9/10 remains usable and a black Ki
 - A required turn pauses for a disconnected player for 60 seconds, then safe auto-play begins. The player may reconnect; the host may remove them as a forfeit.
 - Removing a player burns their cards unseen. They receive a game played and no win. Host authority transfers to the longest-connected remaining player.
 - Rooms return to the lobby after results and expire two hours after becoming empty.
-

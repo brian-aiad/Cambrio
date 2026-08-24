@@ -35,6 +35,7 @@ export interface ActionAck {
   ok: boolean;
   code?: string;
   message?: string;
+  outcome?: GameEffect['type'];
 }
 
 export interface ServerNotice {

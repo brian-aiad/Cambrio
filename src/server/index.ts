@@ -138,7 +138,8 @@ io.on('connection', (socket) => {
       const action = gameActionSchema.parse(payload);
       clientActionId = action.clientActionId;
       const result = await rooms.handleGameAction(socket.data.membership, action);
-      ack?.({ clientActionId, ok: true });
+      const outcome = result.effects?.find((effect) => effect.type === 'stack' || effect.type === 'penalty')?.type;
+      ack?.({ clientActionId, ok: true, outcome });
       for (const effect of result.effects ?? []) {
         if (effect.message) io.to(roomChannel(socket.data.membership!.roomCode)).emit('notice', { kind: effect.type, message: effect.message, playerId: effect.playerId });
       }

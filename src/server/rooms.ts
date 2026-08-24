@@ -62,14 +62,30 @@ export interface ManagerResult {
 
 export class RoomManager {
   private rooms = new Map<string, RoomRuntime>();
-  private processedActions = new Map<string, { ok: boolean; code?: string; message?: string }>();
+  private processedActions = new Map<string, ManagerResult>();
+  private inFlightActions = new Map<string, Promise<ManagerResult>>();
   private stackThrottle = new Map<string, number>();
 
   constructor(private persistence: Persistence) {}
 
   async handleRoomAction(identity: ServerIdentity, membership: Membership | undefined, action: RoomAction): Promise<ManagerResult> {
-    const cached = this.processedActions.get(action.clientActionId);
-    if (cached) return { membership, message: cached.message };
+    const key = `room:${identity.userId}:${action.clientActionId}`;
+    const cached = this.processedActions.get(key);
+    if (cached) return cached;
+    const pending = this.inFlightActions.get(key);
+    if (pending) return this.withoutRepeatedEffects(await pending);
+    const operation = this.executeRoomAction(identity, membership, action);
+    this.inFlightActions.set(key, operation);
+    try {
+      const result = await operation;
+      this.rememberAction(key, result);
+      return result;
+    } finally {
+      this.inFlightActions.delete(key);
+    }
+  }
+
+  private async executeRoomAction(identity: ServerIdentity, membership: Membership | undefined, action: RoomAction): Promise<ManagerResult> {
     let result: ManagerResult;
     switch (action.type) {
       case 'ROOM_CREATE':
@@ -156,16 +172,30 @@ export class RoomManager {
         break;
       }
     }
-    this.rememberAction(action.clientActionId, { ok: true, message: result.message });
     return result;
   }
 
   async handleGameAction(membership: Membership | undefined, action: GameAction): Promise<ManagerResult> {
+    const key = `game:${membership?.roomCode ?? 'none'}:${membership?.playerId ?? 'none'}:${action.clientActionId}`;
+    const cached = this.processedActions.get(key);
+    if (cached) return cached;
+    const pending = this.inFlightActions.get(key);
+    if (pending) return this.withoutRepeatedEffects(await pending);
+    const operation = this.executeGameAction(membership, action);
+    this.inFlightActions.set(key, operation);
+    try {
+      const result = await operation;
+      this.rememberAction(key, result);
+      return result;
+    } finally {
+      this.inFlightActions.delete(key);
+    }
+  }
+
+  private async executeGameAction(membership: Membership | undefined, action: GameAction): Promise<ManagerResult> {
     const { room, player } = this.requireMembership(membership);
     if (!room.game || (room.phase !== 'game' && room.phase !== 'results')) throw new GameRuleError('NO_GAME', 'There is no active game.');
-    if (membership?.waiting) throw new GameRuleError('WAITING', 'Waiting players cannot act in the current game.');
-    const cached = this.processedActions.get(action.clientActionId);
-    if (cached) return { membership, message: cached.message };
+    if (room.waiting.some((candidate) => candidate.id === player.id)) throw new GameRuleError('WAITING', 'Waiting players cannot act in the current game.');
     if (action.type === 'STACK_ATTEMPT') {
       const key = `${room.code}:${player.id}:${action.discardGeneration}`;
       const previous = this.stackThrottle.get(key) ?? 0;
@@ -176,7 +206,6 @@ export class RoomManager {
     const transition = applyGameCommand(room.game, command, Date.now(), secureRandom);
     room.game = transition.state;
     await this.afterTransition(room, transition.effects);
-    this.rememberAction(action.clientActionId, { ok: true });
     return { membership, effects: transition.effects };
   }
 
@@ -193,7 +222,7 @@ export class RoomManager {
     } else if (room.game && room.game.players.some((candidate) => candidate.id === player.id)) {
       room.game = applyGameCommand(room.game, { type: 'SET_CONNECTED', playerId, connected: false }, Date.now(), secureRandom).state;
     }
-    if (room.hostPlayerId === player.id) this.transferHost(room);
+    if (room.hostPlayerId === player.id && explicitLeave) this.transferHost(room);
     if (![...room.players, ...room.waiting].some((candidate) => candidate.connected)) room.expiresAt = Date.now() + ROOM_TTL_MS;
     await this.save(room);
   }
@@ -205,6 +234,17 @@ export class RoomManager {
         this.rooms.delete(room.code);
         await this.persistence.deleteRoom(room.code);
         continue;
+      }
+      const host = room.players.find((player) => player.id === room.hostPlayerId);
+      const hostGrace = host ? room.disconnectGrace[host.id] : undefined;
+      if (host && !host.connected && hostGrace !== undefined && now >= hostGrace) {
+        const previousHostId = room.hostPlayerId;
+        this.transferHost(room);
+        if (room.hostPlayerId !== previousHostId) {
+          delete room.disconnectGrace[host.id];
+          await this.save(room);
+          changed.push(room.code);
+        }
       }
       const game = room.game;
       if (!game || game.phase === 'results') continue;
@@ -380,8 +420,12 @@ export class RoomManager {
     await this.persistence.saveRoom(room.code, room, room.checkpointVersion, room.expiresAt);
   }
 
-  private rememberAction(id: string, result: { ok: boolean; code?: string; message?: string }): void {
-    this.processedActions.set(id, result);
+  private withoutRepeatedEffects(result: ManagerResult): ManagerResult {
+    return { membership: result.membership };
+  }
+
+  private rememberAction(id: string, result: ManagerResult): void {
+    this.processedActions.set(id, this.withoutRepeatedEffects(result));
     if (this.processedActions.size > 2_000) this.processedActions.delete(this.processedActions.keys().next().value!);
   }
 }

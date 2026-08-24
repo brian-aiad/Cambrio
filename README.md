@@ -20,9 +20,10 @@ The web client runs at `http://localhost:5173`; the realtime server runs at `htt
 npm run check
 npm run smoke:runtime
 npm run stress:socket
+npm run stress:actions
 ```
 
-`npm run check` runs linting, strict TypeScript checks, the deterministic rules suite, 350 randomized full games across every supported room size, and a production build. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
+`npm run check` runs linting, strict TypeScript checks, the deterministic rules suite, 350 randomized full games across every supported room size, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run stress:actions` attacks duplicate and mutually exclusive realtime actions. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
 
 ## Production
 
@@ -33,4 +34,4 @@ npm run stress:socket
 
 Do not commit the database password, service-role key, Supabase access token, or Turnstile secret. Only the Supabase project URL, publishable/anon key, and Turnstile site key belong in `VITE_*` variables.
 
-The authoritative rules are in [`docs/GAME_SPEC.md`](docs/GAME_SPEC.md).
+The authoritative rules are in [`docs/GAME_SPEC.md`](docs/GAME_SPEC.md). The interaction and visual language are in [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md). Automated and live release coverage is documented in [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md).

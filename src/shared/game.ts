@@ -1,5 +1,6 @@
 export const SUITS = ['clubs', 'diamonds', 'hearts', 'spades'] as const;
 export const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'] as const;
+export const MAX_HAND_CARDS = 6;
 
 export type Suit = (typeof SUITS)[number];
 export type Rank = (typeof RANKS)[number];
@@ -20,6 +21,7 @@ export interface EnginePlayer {
   handle?: string;
   seat: number;
   cards: string[];
+  cardSlots: Record<string, number>;
   initialPeekComplete: boolean;
   initialPeekOpen: boolean;
   connected: boolean;
@@ -110,6 +112,7 @@ export interface TransitionResult {
 
 export interface CardView {
   id: string;
+  slot: number;
   rank?: Rank;
   suit?: Suit;
 }
@@ -199,13 +202,14 @@ export function createGame(
     ...participant,
     seat,
     cards: [],
+    cardSlots: {},
     initialPeekComplete: false,
     initialPeekOpen: false,
     connected: true,
     forfeited: false,
   }));
   for (let cardNumber = 0; cardNumber < 4; cardNumber += 1) {
-    for (const player of players) player.cards.push(requireDeckCard(deck));
+    for (const player of players) addOwnedCard(player, requireDeckCard(deck), cardNumber);
   }
   return {
     id,
@@ -240,7 +244,10 @@ export function applyGameCommand(
       requirePhase(state, 'initial_peek');
       if (player.initialPeekComplete) fail('PEEK_COMPLETE', 'The initial peek is already complete.');
       player.initialPeekOpen = true;
-      state.temporaryReveals[player.id] = player.cards.slice(2, 4);
+      state.temporaryReveals[player.id] = player.cards.filter((cardId, index) => {
+        const slot = cardSlot(player, cardId, index);
+        return slot === 2 || slot === 3;
+      });
       effects.push({ type: 'peek', playerId: player.id, cardIds: state.temporaryReveals[player.id] });
       break;
     }
@@ -283,7 +290,7 @@ export function applyGameCommand(
       if (targetIndex < 0) fail('NOT_OWNED', 'That card is not owned by the active player.');
       const drawn = state.turn!.drawnCardId;
       if (!drawn) fail('NO_DRAW', 'No card has been drawn.');
-      player.cards[targetIndex] = drawn;
+      replaceOwnedCard(player, command.targetCardId, drawn);
       openDiscard(state, command.targetCardId);
       endTurn(state, now, effects);
       break;
@@ -318,6 +325,7 @@ export function applyGameCommand(
         fail('STACK_CLOSED', 'That discard is no longer stackable.');
       }
       if (player.cards.length === 0) fail('NO_CARDS', 'A zero-card player cannot stack.');
+      if (player.cards.length >= MAX_HAND_CARDS) fail('HAND_LIMIT', 'You cannot attempt a stack while holding six cards.');
       const owner = state.players.find((candidate) => candidate.cards.includes(command.targetCardId) && !candidate.forfeited);
       if (!owner) fail('BAD_TARGET', 'That table card is not available.');
       const top = state.discard.at(-1);
@@ -328,20 +336,19 @@ export function applyGameCommand(
           finishRound(state);
           effects.push({ type: 'results' });
         } else {
-          player.cards.push(penalty);
+          addOwnedCard(player, penalty);
           effects.push({ type: 'penalty', playerId: player.id, message: `${player.name} missed and drew a penalty.` });
         }
         break;
       }
-      owner.cards.splice(owner.cards.indexOf(command.targetCardId), 1);
+      removeOwnedCard(owner, command.targetCardId);
       state.discard.push(command.targetCardId);
       state.stackOpen = false;
       delete state.temporaryReveals[player.id];
       effects.push({ type: 'stack', playerId: player.id, message: `${player.name} stacked successfully.` });
-      if (owner.id !== player.id) {
+      if (owner.cards.length === 0) triggerEnding(state, owner.id, 'zero_cards');
+      if (owner.id !== player.id && owner.cards.length > 0) {
         state.transfer = { fromPlayerId: player.id, toPlayerId: owner.id, deadlineAt: now + TURN_MS };
-      } else if (player.cards.length === 0) {
-        triggerEnding(state, player.id, 'zero_cards');
       }
       break;
     }
@@ -381,9 +388,9 @@ export function projectGame(state: GameState, viewerId: string): GameView {
   if (state.phase === 'results') {
     for (const player of state.players) for (const cardId of player.cards) visible.add(cardId);
   }
-  const cardView = (cardId: string, force = false): CardView => {
+  const cardView = (cardId: string, slot: number, force = false): CardView => {
     const card = state.cards[cardId];
-    return force || visible.has(cardId) ? { ...card } : { id: card.id };
+    return force || visible.has(cardId) ? { ...card, slot } : { id: card.id, slot };
   };
   const top = state.discard.at(-1);
   const drawn = state.turn?.drawnCardId;
@@ -397,19 +404,21 @@ export function projectGame(state: GameState, viewerId: string): GameView {
       name: player.name,
       handle: player.handle,
       seat: player.seat,
-      cards: player.cards.map((cardId) => cardView(cardId)),
+      cards: player.cards
+        .map((cardId, index) => cardView(cardId, cardSlot(player, cardId, index)))
+        .sort((first, second) => first.slot - second.slot),
       connected: player.connected,
       forfeited: player.forfeited,
       initialPeekComplete: player.initialPeekComplete,
     })),
     deckCount: state.deck.length,
-    discard: top ? cardView(top, true) : undefined,
+    discard: top ? cardView(top, -1, true) : undefined,
     stackOpen: state.stackOpen,
     discardGeneration: state.discardGeneration,
     activePlayerId: state.turn?.playerId,
     turnStage: state.turn?.stage,
     deadlineAt: state.transfer?.deadlineAt ?? state.turn?.deadlineAt,
-    drawnCard: drawn && state.turn?.playerId === viewerId ? cardView(drawn, true) : undefined,
+    drawnCard: drawn && state.turn?.playerId === viewerId ? cardView(drawn, -1, true) : undefined,
     power: state.turn?.playerId === viewerId ? state.turn.power : undefined,
     transfer: state.transfer?.fromPlayerId === viewerId ? state.transfer : undefined,
     ending: state.ending
@@ -423,6 +432,58 @@ function requireDeckCard(deck: string[]): string {
   const card = deck.pop();
   if (!card) throw new GameRuleError('DECK_EMPTY', 'The deck is unexpectedly empty.');
   return card;
+}
+
+function ensureCardSlots(player: EnginePlayer): Record<string, number> {
+  player.cardSlots ??= {};
+  const occupied = new Set(Object.values(player.cardSlots));
+  for (const [index, cardId] of player.cards.entries()) {
+    if (player.cardSlots[cardId] !== undefined) continue;
+    let slot = index;
+    while (occupied.has(slot)) slot += 1;
+    player.cardSlots[cardId] = slot;
+    occupied.add(slot);
+  }
+  return player.cardSlots;
+}
+
+function cardSlot(player: EnginePlayer, cardId: string, fallback = 0): number {
+  return player.cardSlots?.[cardId] ?? fallback;
+}
+
+function nextOpenSlot(player: EnginePlayer): number {
+  const occupied = new Set(Object.values(ensureCardSlots(player)));
+  let slot = 0;
+  while (occupied.has(slot)) slot += 1;
+  return slot;
+}
+
+function addOwnedCard(player: EnginePlayer, cardId: string, preferredSlot?: number): void {
+  const slots = ensureCardSlots(player);
+  const slot = preferredSlot ?? nextOpenSlot(player);
+  if (Object.values(slots).includes(slot)) fail('SLOT_OCCUPIED', 'That card position is already occupied.');
+  player.cards.push(cardId);
+  slots[cardId] = slot;
+}
+
+function removeOwnedCard(player: EnginePlayer, cardId: string): number {
+  const index = player.cards.indexOf(cardId);
+  if (index < 0) fail('NOT_OWNED', 'That card is not owned by this player.');
+  const slots = ensureCardSlots(player);
+  const slot = slots[cardId];
+  player.cards.splice(index, 1);
+  delete slots[cardId];
+  return slot;
+}
+
+function replaceOwnedCard(player: EnginePlayer, targetCardId: string, replacementCardId: string): void {
+  const index = player.cards.indexOf(targetCardId);
+  if (index < 0) fail('NOT_OWNED', 'That card is not owned by this player.');
+  const slots = ensureCardSlots(player);
+  const slot = slots[targetCardId] ?? index;
+  player.cards[index] = replacementCardId;
+  delete slots[targetCardId];
+  slots[replacementCardId] = slot;
 }
 
 function getPlayer(state: GameState, playerId: string): EnginePlayer {
@@ -477,7 +538,7 @@ function discardDrawn(
   openDiscard(state, cardId);
   const power = powerFor(state.cards[cardId]);
   if (power && hasLegalPowerTarget(state, player, power)) {
-    state.turn = { playerId: player.id, stage: 'power', power: { kind: power, status: 'offered', targets: [] }, deadlineAt: now + TURN_MS };
+    state.turn = { playerId: player.id, stage: 'power', power: { kind: power, status: 'selecting', targets: [] }, deadlineAt: now + TURN_MS };
     effects.push({ type: 'power', playerId: player.id });
   } else {
     endTurn(state, now, effects);
@@ -577,8 +638,16 @@ function swapOwnedCards(state: GameState, firstId: string, secondId: string): vo
   const firstOwner = state.players.find((player) => player.cards.includes(firstId));
   const secondOwner = state.players.find((player) => player.cards.includes(secondId));
   if (!firstOwner || !secondOwner || firstOwner.id === secondOwner.id) fail('BAD_SWAP', 'Choose cards owned by different players.');
+  const firstSlot = cardSlot(firstOwner, firstId, firstOwner.cards.indexOf(firstId));
+  const secondSlot = cardSlot(secondOwner, secondId, secondOwner.cards.indexOf(secondId));
   firstOwner.cards[firstOwner.cards.indexOf(firstId)] = secondId;
   secondOwner.cards[secondOwner.cards.indexOf(secondId)] = firstId;
+  ensureCardSlots(firstOwner);
+  ensureCardSlots(secondOwner);
+  delete firstOwner.cardSlots[firstId];
+  delete secondOwner.cardSlots[secondId];
+  firstOwner.cardSlots[secondId] = firstSlot;
+  secondOwner.cardSlots[firstId] = secondSlot;
 }
 
 function canSwapOwnedCards(state: GameState, firstId: string, secondId: string): boolean {
@@ -591,10 +660,9 @@ function transferCard(state: GameState, cardId: string, now: number, effects: Ga
   const transfer = state.transfer!;
   const from = getPlayer(state, transfer.fromPlayerId);
   const to = getPlayer(state, transfer.toPlayerId);
-  const index = from.cards.indexOf(cardId);
-  if (index < 0) fail('NOT_OWNED', 'Choose one of your cards to give.');
-  from.cards.splice(index, 1);
-  to.cards.push(cardId);
+  if (!from.cards.includes(cardId)) fail('NOT_OWNED', 'Choose one of your cards to give.');
+  removeOwnedCard(from, cardId);
+  addOwnedCard(to, cardId);
   state.transfer = undefined;
   effects.push({ type: 'transfer', playerId: from.id, message: `${from.name} gave a hidden card to ${to.name}.` });
   if (from.cards.length === 0) triggerEnding(state, from.id, 'zero_cards');
@@ -677,6 +745,7 @@ function forfeitPlayer(state: GameState, player: EnginePlayer, now: number, effe
   player.connected = false;
   state.burn.push(...player.cards);
   player.cards = [];
+  player.cardSlots = {};
   delete state.temporaryReveals[player.id];
   if (state.ending) state.ending.queue = state.ending.queue.filter((id) => id !== player.id);
   if (state.transfer && (state.transfer.fromPlayerId === player.id || state.transfer.toPlayerId === player.id)) state.transfer = undefined;
