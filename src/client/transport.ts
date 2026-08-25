@@ -52,6 +52,9 @@ class HttpRealtimeTransport implements ClientTransport {
   constructor(serverUrl: string, private session: ClientSession) {
     this.endpoint = new URL('/api/realtime', serverUrl).toString();
     this.membership = this.restoreMembership();
+    document.addEventListener('visibilitychange', this.wakeWhenVisible);
+    window.addEventListener('online', this.wakeWhenVisible);
+    window.addEventListener('pageshow', this.wakeWhenVisible);
     queueMicrotask(() => {
       if (!this.active) return;
       this.setConnected(true);
@@ -69,6 +72,9 @@ class HttpRealtimeTransport implements ClientTransport {
   disconnect() {
     this.active = false;
     window.clearTimeout(this.pollTimer);
+    document.removeEventListener('visibilitychange', this.wakeWhenVisible);
+    window.removeEventListener('online', this.wakeWhenVisible);
+    window.removeEventListener('pageshow', this.wakeWhenVisible);
     this.setConnected(false);
   }
 
@@ -109,6 +115,13 @@ class HttpRealtimeTransport implements ClientTransport {
       if (this.active) this.pollTimer = window.setTimeout(() => void this.poll(), document.hidden ? 2_000 : this.nextPollMilliseconds);
     }
   }
+
+  private wakeWhenVisible = () => {
+    if (!this.active || document.hidden) return;
+    window.clearTimeout(this.pollTimer);
+    this.pollTimer = undefined;
+    void this.poll();
+  };
 
   private async request(body: unknown, milliseconds: number): Promise<HttpResponse> {
     const controller = new AbortController();

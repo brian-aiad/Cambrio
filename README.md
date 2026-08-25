@@ -20,11 +20,12 @@ The web client runs at `http://localhost:5173`; the realtime server runs at `htt
 npm run check
 npm run smoke:runtime
 npm run smoke:reconnect
+npm run smoke:http
 npm run stress:socket
 npm run stress:actions
 ```
 
-`npm run check` runs linting, strict TypeScript checks, the deterministic rules suite, 350 randomized full games across every supported room size, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run smoke:reconnect` interrupts a live transport and verifies that the same player returns to exactly one seat. `npm run stress:actions` attacks duplicate and mutually exclusive realtime actions. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
+`npm run check` runs linting, strict TypeScript checks, 75 deterministic rules and server tests, 350 randomized full games across every supported room size, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run smoke:reconnect` interrupts a live transport and verifies that the same player returns to exactly one seat. `npm run smoke:http` exercises the hosted HTTP transport, personalized hidden-information views, stack serialization, and request boundaries. `npm run stress:actions` attacks duplicate and mutually exclusive realtime actions. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
 
 ## Free production hosting
 
@@ -35,7 +36,11 @@ The production site is deployed from `main` to `https://cambrio.vercel.app`. Ver
 3. Add the optional Supabase URL and keys only when accounts, persistent profiles, and match history are required. Guest rooms work without account setup.
 4. Push to `main`; Vercel builds and promotes the new deployment automatically.
 
-The hosted transport polls only the viewer-specific room projection. Periodic presence heartbeats pause an active round when a browser disappears and restore the same seat and remaining clock when it returns. Local development continues to use Socket.IO for faster feedback unless `VITE_HTTP_TRANSPORT=true` is set.
+The hosted transport polls only the viewer-specific room projection. Periodic presence heartbeats pause an active round when a browser disappears and restore the same seat and remaining clock when it returns. Returning to a visible tab or regaining network access triggers an immediate resync. If someone cannot return, the host can forfeit that disconnected hand without abandoning the table; host departure transfers that control safely. Temporary card faces are revoked on disconnect and never restored from stale browser state.
+
+Expired invite links preserve and display the requested room code, explain what happened, and offer either a direct route home or a one-tap fresh table. Local development continues to use Socket.IO for faster feedback unless `VITE_HTTP_TRANSPORT=true` is set.
+
+Hosted realtime requests reject cross-site browser origins, malformed payloads, and bodies larger than 32 KiB. Production responses also set a restrictive Content Security Policy and anti-framing, MIME-sniffing, referrer, and browser-permission headers.
 
 Do not commit the database password, service-role key, Supabase access token, or Turnstile secret. Only the Supabase project URL, publishable/anon key, and Turnstile site key belong in `VITE_*` variables.
 

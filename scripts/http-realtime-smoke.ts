@@ -28,6 +28,25 @@ interface ApiResult {
 
 const clients: Client[] = Array.from({ length: 8 }, (_, index) => ({ visitorId: `http_smoke_player_${index}_${'x'.repeat(12)}` }));
 
+const forbiddenOrigin = await realtime.fetch(new Request('https://cambrio.vercel.app/api/realtime', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Origin: 'https://example.invalid', 'x-visitor-id': clients[0].visitorId },
+  body: JSON.stringify({ operation: 'sync' }),
+}));
+if (forbiddenOrigin.status !== 403) throw new Error(`Cross-origin action was not rejected: ${forbiddenOrigin.status}.`);
+const oversized = await realtime.fetch(new Request('https://cambrio.vercel.app/api/realtime', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'x-visitor-id': clients[0].visitorId },
+  body: JSON.stringify({ operation: 'sync', padding: 'x'.repeat(33 * 1024) }),
+}));
+if (oversized.status !== 413) throw new Error(`Oversized realtime payload was not rejected: ${oversized.status}.`);
+const malformed = await realtime.fetch(new Request('https://cambrio.vercel.app/api/realtime', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'x-visitor-id': clients[0].visitorId },
+  body: '{',
+}));
+if (malformed.status !== 400) throw new Error(`Malformed realtime JSON was not rejected: ${malformed.status}.`);
+
 async function call(client: Client, body: unknown): Promise<ApiResult> {
   const request = new Request('https://cambrio.vercel.app/api/realtime', {
     method: 'POST',
@@ -117,6 +136,7 @@ try {
     concurrentJoins: 'serialized',
     rapidDeals: `${starts.length} requests / 1 round`,
     privateProjections: 'no leaked ranks, suits, or face IDs',
+    requestBoundaries: 'foreign origins, malformed JSON, and payloads over 32KB rejected',
     stackRace: '8 requests / 1 winner',
     hostRemoval: 'removed player receives the exact reason',
     storage: 'Upstash free',

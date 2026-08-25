@@ -86,6 +86,18 @@ describe('hidden information', () => {
     expect(view.players.find((player) => player.id !== viewer.id)!.cards.some((card) => card.rank)).toBe(false);
   });
 
+  it('revokes temporary face data as soon as the viewing browser disconnects', () => {
+    let game = createGame('disconnect-reveal', people.slice(0, 2), 1_000, fixedRandom);
+    const viewer = game.players[0];
+    game = applyGameCommand(game, { type: 'INITIAL_PEEK_START', playerId: viewer.id }, 1_001, fixedRandom).state;
+    expect(projectGame(game, viewer.id).players.find((player) => player.id === viewer.id)!.cards.filter((card) => card.rank)).toHaveLength(2);
+
+    game = applyGameCommand(game, { type: 'SET_CONNECTED', playerId: viewer.id, connected: false }, 1_002, fixedRandom).state;
+    expect(game.temporaryReveals[viewer.id]).toBeUndefined();
+    expect(game.players.find((player) => player.id === viewer.id)?.initialPeekOpen).toBe(false);
+    expect(projectGame(game, viewer.id).players.flatMap((player) => player.cards).some((card) => card.rank || card.suit)).toBe(false);
+  });
+
   it('sends a drawn face only to the active player while every hand stays hidden', () => {
     let game = readyGame(4);
     const activeId = game.turn!.playerId;

@@ -107,7 +107,8 @@ export function App() {
     if (pendingRoomActions.current.has(key)) return { clientActionId: 'pending', ok: false, code: 'ACTION_PENDING' };
     pendingRoomActions.current.add(key);
     try {
-      return showActionError(await emitAction(socket, 'room:action', { ...input, clientActionId: nanoid() }));
+      const result = await emitAction(socket, 'room:action', { ...input, clientActionId: nanoid() });
+      return input.type === 'ROOM_CREATE' || input.type === 'ROOM_JOIN' ? result : showActionError(result);
     } finally {
       pendingRoomActions.current.delete(key);
     }
@@ -205,6 +206,7 @@ function Landing({ connected, send, initialCode }: { connected: boolean; send: (
   const [code, setCode] = useState(initialCode ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const missingInvite = Boolean(initialCode && /does not exist|expired/i.test(error));
   const autoJoinAttempted = useRef(false);
   const submit = async (mode: 'create' | 'join') => {
     setBusy(true); setError('');
@@ -230,10 +232,10 @@ function Landing({ connected, send, initialCode }: { connected: boolean; send: (
       </div>
       <section className="join-panel glass">
         <div className="mini-cards" aria-hidden="true"><i /><i /><i /></div>
-        <h2>{initialCode ? 'Join this table' : 'Take a seat'}</h2>
+        {initialCode ? <div className="invite-heading"><span>Private invite</span><h2>Join this table</h2><strong aria-label={`Room code ${initialCode}`}>{initialCode}</strong></div> : <h2>Take a seat</h2>}
         <label>Your display name<input name="displayName" autoComplete="name" value={name} maxLength={20} onChange={(event) => setName(event.target.value)} placeholder="What should friends call you?" /></label>
         {initialCode ? (
-          <button className="primary wide" disabled={!connected || busy || name.trim().length < 2} onClick={() => void submit('join')}>Join room <ArrowRight size={17} /></button>
+          !missingInvite && <button className="primary wide" disabled={!connected || busy || name.trim().length < 2} onClick={() => void submit('join')}>Join room <ArrowRight size={17} /></button>
         ) : (
           <>
             <button className="primary wide" disabled={!connected || busy || name.trim().length < 2} onClick={() => void submit('create')}>Create private room <ArrowRight size={17} /></button>
@@ -241,7 +243,7 @@ function Landing({ connected, send, initialCode }: { connected: boolean; send: (
             <div className="code-row"><input name="roomCode" aria-label="Room code" className="code-input" value={code} maxLength={8} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="ABCD2345" /><button disabled={!connected || busy || code.length !== 8 || name.trim().length < 2} onClick={() => void submit('join')}>Join</button></div>
           </>
         )}
-        {error && <p className="form-error">{error}</p>}
+        {missingInvite ? <div className="expired-invite" role="alert"><strong>This table is no longer active.</strong><span>Room {initialCode} may have expired. Ask the host for a fresh link, or open a new table now.</span><div><button className="secondary" onClick={() => window.location.assign('/')}>Back home</button><button className="primary" disabled={!connected || busy || name.trim().length < 2} onClick={() => void submit('create')}>Start new table</button></div></div> : error && <p className="form-error" role="alert">{error}</p>}
         <small>No account required. Your room expires two hours after everyone leaves.</small>
       </section>
     </motion.main>
@@ -364,7 +366,8 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
   // A new authoritative game version is the animation trigger.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.version]);
-  const revealKey = game.power?.status === 'revealing' ? `${game.power.kind}:${game.power.targets.join(':')}` : '';
+  const revealFacesReady = game.power?.status === 'revealing' && game.power.targets.every((targetId) => game.players.some((player) => player.cards.some((card) => card.id === targetId && Boolean(card.rank))));
+  const revealKey = game.power?.status === 'revealing' ? `${game.power.kind}:${game.power.targets.join(':')}:${revealFacesReady ? 'visible' : 'revoked'}` : '';
   useEffect(() => {
     if (!revealKey || game.power?.status !== 'revealing') {
       setRevealVisible(false);
@@ -379,6 +382,10 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
       if (game.power?.kind === 'black_king') void sendRef.current({ type: 'POWER_CONCEAL' });
       else void sendRef.current({ type: 'POWER_COMPLETE' });
     };
+    if (!revealFacesReady) {
+      finish();
+      return;
+    }
     const timer = window.setTimeout(finish, 1_700);
     const concealWhenHidden = () => { if (document.hidden) finish(); };
     window.addEventListener('blur', finish);
@@ -395,7 +402,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
     void sendRef.current({ type: 'POWER_USE' });
   }, [game.activePlayerId, game.power?.status, game.version, self.id]);
 
-  if (game.phase === 'initial_peek') return <InitialPeek game={game} self={self} send={send} />;
+  if (game.phase === 'initial_peek') return <InitialPeek room={room} game={game} self={self} send={send} sendRoom={sendRoom} />;
   if (game.phase === 'results') return <Results room={room} game={game} sendRoom={sendRoom} />;
 
   const opponents = game.players.filter((player) => player.id !== self.id && !player.forfeited);
@@ -473,6 +480,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
 
       <section className="self-zone"><PlayerHand player={self} canInteract={() => canInteract(self)} highlight={() => isContextTarget(self)} targetCue={targetCue(self)} selectionKind={selectionKind} selectedCards={power?.targets} pendingCardId={pendingCardId} arrivingSlots={flightSlots(tableCue, self.id)} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, self)} active={isTurn} /><span className="you-label">YOU &middot; {self.cards.length ? `${self.cards.length}/${MAX_HAND_CARDS} CARDS` : 'OUT'}</span></section>
       <div className="game-actions">{canCallCambrio && <button className="cambio-button" onClick={() => { vibrate(24); void send({ type: 'CALL_CAMBIO' }); }}><GameGlyph kind="cambio" />Call Cambrio</button>}</div>
+      {game.paused && <PauseRecoveryControl room={room} game={game} sendRoom={sendRoom} />}
       <AnimatePresence>{stackFeedback && stackFeedback.kind !== 'trying' && <motion.div className={`stack-result ${stackFeedback.kind}`} initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, y: -8 }}>{stackFeedback.kind === 'correct' ? 'MATCH — STACKED' : stackFeedback.kind === 'wrong' ? 'NO MATCH — PENALTY CARD' : stackFeedback.kind === 'locked' ? 'NO MATCH — WAIT FOR NEXT DISCARD' : 'STACK ALREADY TAKEN'}</motion.div>}</AnimatePresence>
       <AnimatePresence>{tableCue && <SwapFlightLayer key={`flight-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
       <AnimatePresence>{tableCue && tableCue.kind !== 'stack' && tableCue.kind !== 'draw' && <TableActionCue key={`cue-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
@@ -482,7 +490,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
   );
 }
 
-function InitialPeek({ game, self, send }: { game: GameView; self: PlayerView; send: (action: GameActionInput) => Promise<ActionAck> }) {
+function InitialPeek({ room, game, self, send, sendRoom }: { room: RoomView; game: GameView; self: PlayerView; send: (action: GameActionInput) => Promise<ActionAck>; sendRoom: (action: RoomActionInput) => Promise<ActionAck> }) {
   const [holding, setHolding] = useState(false);
   const reduceMotion = useReducedMotion();
   const holdingRef = useRef(false);
@@ -535,6 +543,7 @@ function InitialPeek({ game, self, send }: { game: GameView; self: PlayerView; s
       <div className="peek-hand">{self.cards.map((card, index) => <motion.div className="hand-slot" data-peekable={card.slot >= 2 || undefined} key={card.id} style={{ gridColumn: card.slot % 2 + 1, gridRow: Math.floor(card.slot / 2) + 1 }} initial={reduceMotion ? false : { opacity: 0, y: -54, x: (index % 2 ? 1 : -1) * 12, rotate: (index % 2 ? 1 : -1) * 5 }} animate={{ opacity: 1, y: 0, x: 0, rotate: 0 }} transition={{ delay: reduceMotion ? 0 : .08 + index * .075, duration: reduceMotion ? 0 : .36, ease: [0.22, 1, 0.36, 1] }}><Card card={card} faceDown={!holding || card.slot < 2} positioned slot={card.slot} /></motion.div>)}</div>
       {game.paused ? <PauseBanner game={game} inline /> : self.initialPeekComplete ? <motion.div className="waiting-ready" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><span className="spinner" />Waiting for everyone…</motion.div> : <motion.button className="hold-button" onPointerDown={begin} onPointerUp={end} onPointerCancel={end} onPointerLeave={end} animate={{ scale: holding ? .97 : 1, y: holding ? 2 : 0 }} transition={{ duration: reduceMotion ? 0 : .12 }}><GameGlyph kind="peek" />{holding ? 'Memorize bottom two' : 'Hold to peek'}</motion.button>}
       <motion.div className="ready-progress" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: reduceMotion ? 0 : .42 }}>{game.players.filter((player) => player.initialPeekComplete).length}/{game.players.length} ready</motion.div>
+      {game.paused && <PauseRecoveryControl room={room} game={game} sendRoom={sendRoom} />}
     </main>
   );
 }
@@ -708,7 +717,7 @@ export function Card({ card, faceDown = false, interactive = false, mini = false
   const actualSlot = slot ?? card?.slot;
   const actionDescription = selectionOrder ? `; selected ${selectionKind === 'peek' ? 'to peek' : selectionOrder === 1 ? 'source' : 'destination'}` : targetCue ? `; ${targetCue === 'step-1' ? 'first target' : targetCue === 'step-2' ? 'second target' : targetCue === 'give' ? 'tap to give' : 'tap to swap'}` : interactive ? '; tap to select' : '';
   const description = !card ? 'Empty discard pile' : hidden ? `${actualSlot === undefined || actualSlot < 0 ? 'Hidden' : slotName(actualSlot)} card${actionDescription}` : `${card.rank} of ${card.suit}${actionDescription}`;
-  return <motion.button data-card-id={card?.id} data-slot={actualSlot} initial={{ opacity: 0, y: hidden ? -8 : 0, scale: .96 }} title={description} aria-label={description} aria-busy={pending} className={`playing-card ${hidden ? 'face-down' : ''} ${red ? 'red' : ''} ${interactive ? 'interactive' : ''} ${targetOption ? 'target-option' : ''} ${mini ? 'mini' : ''} ${positioned ? 'positioned' : ''} ${selectionOrder ? 'selected' : ''} ${pending ? 'action-pending' : ''} ${feedback ? `stack-${feedback}` : ''} ${!card ? 'empty' : ''}`} disabled={!interactive || pending} onClick={onClick} animate={feedback === 'wrong' ? { opacity: 1, y: 0, x: [0, -7, 7, -5, 5, 0], rotate: [0, -1.4, 1.4, -.8, .8, 0] } : feedback === 'correct' ? { opacity: 1, y: 0, scale: [1, 1.08, 1] } : { opacity: 1, y: 0, scale: 1 }} transition={feedback ? { duration: .38, ease: 'easeOut' } : { opacity: { duration: .16 }, transform: { duration: .18, ease: [0.22, 1, 0.36, 1] } }} whileTap={interactive ? { scale: .96 } : undefined}>
+  return <button data-card-id={card?.id} data-slot={actualSlot} title={description} aria-label={description} aria-busy={pending} className={`playing-card ${hidden ? 'face-down' : ''} ${red ? 'red' : ''} ${interactive ? 'interactive' : ''} ${targetOption ? 'target-option' : ''} ${mini ? 'mini' : ''} ${positioned ? 'positioned' : ''} ${selectionOrder ? 'selected' : ''} ${pending ? 'action-pending' : ''} ${feedback ? `stack-${feedback}` : ''} ${!card ? 'empty' : ''}`} disabled={!interactive || pending} onClick={onClick}>
     <AnimatePresence initial={false} mode="popLayout">
       {hidden ? <motion.span key="back" className="card-surface card-reverse" initial={{ opacity: 0, rotateY: -88 }} animate={{ opacity: 1, rotateY: 0 }} exit={{ opacity: 0, rotateY: 88 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><CardBackMark /></motion.span> : <motion.span key="front" className="card-surface card-front" initial={{ opacity: 0, rotateY: 88 }} animate={{ opacity: 1, rotateY: 0 }} exit={{ opacity: 0, rotateY: -88 }} transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}><span className="corner" data-rank={card!.rank}><b>{card!.rank}</b><SuitMark suit={card!.suit!} /></span><SuitMark suit={card!.suit!} className="center-suit" /></motion.span>}
     </AnimatePresence>
@@ -717,7 +726,7 @@ export function Card({ card, faceDown = false, interactive = false, mini = false
     {selectionOrder && <motion.span className="selection-order" aria-hidden="true" initial={{ scale: .5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>{selectionOrder}<small>{selectionKind === 'peek' ? 'PEEK' : selectionOrder === 1 ? 'FROM' : 'TO'}</small></motion.span>}
     {pending && <span className="card-pending" aria-hidden="true" />}
     {label && <em>{label}</em>}
-  </motion.button>;
+  </button>;
 }
 
 function TurnBanner({ game, self }: { game: GameView; self: PlayerView }) {
@@ -742,6 +751,35 @@ function PauseBanner({ game, inline = false }: { game: GameView; inline?: boolea
   const names = game.players.filter((player) => game.paused?.playerIds.includes(player.id)).map((player) => player.name);
   const label = names.length === 1 ? names[0] : `${names.length} players`;
   return <motion.div className={`pause-banner ${inline ? 'inline' : ''}`} role="status" aria-live="polite" initial={{ opacity: 0, scale: .96 }} animate={{ opacity: 1, scale: 1 }}><span className="pause-symbol" aria-hidden="true"><i /><i /></span><div><strong>Game paused</strong><small>Waiting for {label} to reconnect</small></div></motion.div>;
+}
+
+function PauseRecoveryControl({ room, game, sendRoom }: { room: RoomView; game: GameView; sendRoom: (action: RoomActionInput) => Promise<ActionAck> }) {
+  const [open, setOpen] = useState(false);
+  const [pendingPlayerId, setPendingPlayerId] = useState<string>();
+  const disconnected = game.players.filter((player) => game.paused?.playerIds.includes(player.id));
+  const isHost = room.hostPlayerId === room.selfPlayerId;
+  if (!game.paused || !isHost || disconnected.length === 0) return null;
+  const remove = async (player: PlayerView) => {
+    if (pendingPlayerId) return;
+    setPendingPlayerId(player.id);
+    try {
+      const result = await sendRoom({ type: 'ROOM_REMOVE', playerId: player.id });
+      if (result.ok && disconnected.length === 1) setOpen(false);
+    } finally {
+      setPendingPlayerId(undefined);
+    }
+  };
+  return <>
+    <button className="pause-recovery-trigger" aria-haspopup="dialog" aria-expanded={open} onClick={() => { vibrate(10); setOpen(true); }}><UserRound size={15} /><span>Manage pause</span><b>{disconnected.length}</b></button>
+    <AnimatePresence>{open && <motion.div className="pause-recovery-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onPointerDown={() => !pendingPlayerId && setOpen(false)}>
+      <motion.section className="pause-recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="pause-recovery-title" initial={{ opacity: 0, y: 14, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: .98 }} transition={{ duration: .16, ease: [0.22, 1, 0.36, 1] }} onPointerDown={(event) => event.stopPropagation()}>
+        <span className="pause-symbol" aria-hidden="true"><i /><i /></span>
+        <div className="pause-recovery-copy"><p className="eyebrow">Host control</p><h2 id="pause-recovery-title">Keep waiting or continue?</h2><p>Every seat stays exactly where it was. Remove someone only if they are not coming back; their hand will forfeit and the round will resume when all remaining players are online.</p></div>
+        <div className="pause-player-list">{disconnected.map((player) => <div key={player.id}><span className="pause-player-avatar">{player.name.slice(0, 2).toUpperCase()}</span><span><strong>{player.name}</strong><small>Seat saved · offline</small></span><button className="danger-outline" aria-busy={pendingPlayerId === player.id} disabled={Boolean(pendingPlayerId)} onClick={() => void remove(player)}>{pendingPlayerId === player.id ? <span className="button-spinner" /> : 'Forfeit hand'}</button></div>)}</div>
+        <button className="secondary pause-wait-button" disabled={Boolean(pendingPlayerId)} onClick={() => setOpen(false)}>Keep waiting</button>
+      </motion.section>
+    </motion.div>}</AnimatePresence>
+  </>;
 }
 
 function AccountPanel({ session, close, force = false, onSaved, onLeave }: { session: ClientSession; close: () => void; force?: boolean; onSaved?: () => void; onLeave?: () => void }) {

@@ -402,6 +402,10 @@ export function applyGameCommand(
     }
     case 'SET_CONNECTED': {
       player.connected = command.connected;
+      if (!command.connected) {
+        player.initialPeekOpen = false;
+        delete state.temporaryReveals[player.id];
+      }
       break;
     }
     case 'FORFEIT_PLAYER': {

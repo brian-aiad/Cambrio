@@ -27,6 +27,8 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents, Record<string,
   ...(corsOptions ? { cors: corsOptions } : {}),
   pingInterval: 5_000,
   pingTimeout: 7_000,
+  maxHttpBufferSize: 32 * 1024,
+  perMessageDeflate: false,
   connectionStateRecovery: { maxDisconnectionDuration: 120_000, skipMiddlewares: false },
 });
 

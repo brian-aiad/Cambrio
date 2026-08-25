@@ -19,11 +19,12 @@ async (page) => {
         drawDisabled: deck instanceof HTMLButtonElement ? deck.disabled : true,
         cambioButtons: document.querySelectorAll('.cambio-button').length,
         holdButtons: document.querySelectorAll('.hold-button').length,
+        recoveryButtons: document.querySelectorAll('.pause-recovery-trigger').length,
       };
     });
     if (result.width > result.viewport + 1) throw new Error(`Pause scene overflowed ${viewport.width}x${viewport.height}.`);
-    const unsafeTable = scene === 'paused' && (!result.pausedTitle?.includes('disconnected') || !result.pausedTimer || result.interactiveCards || !result.drawDisabled || result.cambioButtons);
-    const unsafePeek = scene === 'initial-paused' && (!result.pauseBanner || result.holdButtons);
+    const unsafeTable = scene === 'paused' && (!result.pausedTitle?.includes('disconnected') || !result.pausedTimer || result.interactiveCards || !result.drawDisabled || result.cambioButtons || result.recoveryButtons !== 1);
+    const unsafePeek = scene === 'initial-paused' && (!result.pauseBanner || result.holdButtons || result.recoveryButtons !== 1);
     if (unsafeTable || unsafePeek) {
       throw new Error(`Pause controls are unsafe: ${JSON.stringify(result)}`);
     }
@@ -31,6 +32,13 @@ async (page) => {
     if (scene === 'paused' && viewport.height > 680 && !result.visiblePauseBanner) throw new Error('The tall table has no central pause signal.');
     if (scene === 'paused' && viewport.height <= 680 && result.visiblePauseBanner) throw new Error('The compact pause signal covers the table on a short phone.');
     await page.screenshot({ path: `${root}/${scene}-${players}p-${viewport.width}x${viewport.height}.png` });
+    await page.locator('.pause-recovery-trigger').click();
+    await page.getByRole('dialog').waitFor();
+    await page.waitForTimeout(220);
+    const dialog = await page.getByRole('dialog').boundingBox();
+    if (!dialog || dialog.x < -1 || dialog.y < -1 || dialog.x + dialog.width > viewport.width + 1 || dialog.y + dialog.height > viewport.height + 1) throw new Error(`Recovery dialog escaped ${viewport.width}x${viewport.height}: ${JSON.stringify(dialog)}.`);
+    await page.screenshot({ path: `${root}/${scene}-recovery-${players}p-${viewport.width}x${viewport.height}.png` });
+    await page.getByRole('button', { name: 'Keep waiting' }).click();
     checks.push({ scene, players, viewport: `${viewport.width}x${viewport.height}`, ...result });
   };
 

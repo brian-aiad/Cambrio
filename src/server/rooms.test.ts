@@ -232,6 +232,25 @@ describe('RoomManager integration', () => {
     expect(room.game?.results?.find((result) => result.playerId === hostMembership.playerId)?.winner).toBe(true);
   });
 
+  it('transfers host control after an active voluntary leave and lets the new host finish the round', async () => {
+    const { manager, hostMembership, guestMembership } = await startedRoom();
+    await completePeek(manager, hostMembership);
+    await completePeek(manager, guestMembership);
+
+    await manager.handleRoomAction(host, hostMembership, roomAction({ type: 'ROOM_LEAVE' }));
+    let room = (await manager.get(hostMembership.roomCode))!;
+    expect(room.hostPlayerId).toBe(guestMembership.playerId);
+    expect(room.pause).toBeDefined();
+    expect(room.players.find((player) => player.id === hostMembership.playerId)).toMatchObject({ connected: false });
+
+    await manager.handleRoomAction(guest, guestMembership, roomAction({ type: 'ROOM_REMOVE', playerId: hostMembership.playerId }));
+    room = (await manager.get(hostMembership.roomCode))!;
+    expect(room.phase).toBe('results');
+    expect(room.pause).toBeUndefined();
+    expect(room.game?.results?.find((result) => result.playerId === hostMembership.playerId)?.forfeited).toBe(true);
+    expect(room.game?.results?.find((result) => result.playerId === guestMembership.playerId)?.winner).toBe(true);
+  });
+
   it('freezes a disconnected seat indefinitely and restores its remaining turn time on rejoin', async () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(8_000_000);
     try {

@@ -32,15 +32,28 @@ const redisUrl = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_U
 const redisToken = process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN;
 const redis = redisUrl && redisToken ? new Redis({ url: redisUrl, token: redisToken }) : undefined;
 const PRESENCE_STALE_MS = 18_000;
+const MAX_REQUEST_BYTES = 32 * 1024;
 
 export default {
   async fetch(request: Request) {
     if (request.method !== 'POST') return Response.json({ error: 'Method not allowed.' }, { status: 405 });
     if (!redis) return Response.json({ error: 'Realtime storage is not configured.' }, { status: 503 });
+    const origin = request.headers.get('origin');
+    if (origin && origin !== new URL(request.url).origin) return Response.json({ error: 'Origin not allowed.' }, { status: 403 });
+    if (request.headers.get('sec-fetch-site') === 'cross-site') return Response.json({ error: 'Cross-site requests are not allowed.' }, { status: 403 });
+    const declaredLength = Number(request.headers.get('content-length') ?? 0);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) return Response.json({ error: 'Request too large.' }, { status: 413 });
+    const rawBody = await request.text();
+    if (new TextEncoder().encode(rawBody).byteLength > MAX_REQUEST_BYTES) return Response.json({ error: 'Request too large.' }, { status: 413 });
+    let body: RealtimeRequest;
+    try {
+      body = JSON.parse(rawBody) as RealtimeRequest;
+    } catch {
+      return Response.json({ error: 'Invalid JSON.' }, { status: 400 });
+    }
 
     try {
       const identity = identityFromRequest(request);
-      const body = await request.json() as RealtimeRequest;
       const response = body.operation === 'sync'
         ? await synchronize(identity, body.membership, body.presence)
         : await performAction(identity, body);

@@ -24,6 +24,9 @@ This matrix records the release checks for the server-authoritative rules and th
 - 96 live Socket.IO clients in 12 simultaneous full rooms for the normal smoke.
 - 400 live Socket.IO clients in 50 simultaneous full rooms for the release load pass.
 - Live transport interruption freezes all actions and the exact remaining timer; recovery restores the same player ID, one seat, normalized name, and saved clock.
+- Hard reload during initial peek revokes every temporary face; hard reload after drawing restores the exact pending card and accepts no duplicate draw.
+- Three live browsers verify simultaneous disconnects, partial recovery, host removal of the remaining offline seat, voluntary host departure, control transfer, and a correctly scored forfeit result.
+- Hosted request boundaries reject foreign browser origins, malformed JSON, and payloads larger than 32 KiB.
 - Global game-version checks reject delayed turn/power decisions; discard-generation checks keep legitimate stack races concurrent.
 
 ## Eight-player layout audit
@@ -46,12 +49,15 @@ The full-lobby browser audit creates eight isolated identities at both 320×568 
 
 Two live-browser acceptance flows exercise the actual Socket.IO application rather than deterministic fixtures. One creates eight isolated seated identities plus a ninth queued identity, verifies the full-table and active-round queue states, leaves that queue cleanly, completes the private BL/BR peeks, drives all eight real turns, verifies every client receives each spatial card flight, disconnects a seated browser, asserts the whole table and timer freeze, rejoins the exact seat, and checks 320×568 plus 844×390 overflow. The other adds a third player during a two-player round, completes a Cambrio ending, verifies both result projections reveal and score the same round without stale notices, promotes the waiting player into the rematch lobby, returns a host-removed player home with a clear explanation, and verifies a voluntary seated-player leave.
 
+The production-preview performance audit uses a four-times CPU slowdown and mobile-3G network profile. Its current cold-load result is 1.46 s first contentful paint, 1.39 s load, four requests, and 185 KiB transferred. A warmed draw transition samples at 11.8 ms p95 frame interval; input becomes responsive in 31 ms. The audit keeps card motion on transform/opacity paths and includes reduced-motion coverage.
+
 ## Release commands
 
 ```bash
 npm run check
 npm run smoke:runtime
 npm run smoke:reconnect
+npm run smoke:http
 npm run stress:socket
 npm run stress:actions
 ```
