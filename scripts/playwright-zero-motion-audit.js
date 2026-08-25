@@ -8,7 +8,7 @@ async (page) => {
   await page.locator('[data-table-zone="deck"]').click();
   await page.waitForTimeout(80);
   if (await page.locator('.swap-flight-layer.discard .card-flight').count() !== 1) throw new Error('A zero-card turn did not animate its forced deck-to-discard move.');
-  if (!(await page.locator('.flight-endpoint em').textContent())?.includes('Deck')) throw new Error('Forced discard did not identify the deck as its source.');
+  if ((await page.locator('.card-flight').getAttribute('data-flight-from')) !== 'Deck' || (await page.locator('.card-flight').getAttribute('data-flight-to')) !== 'Discard') throw new Error('Forced discard did not preserve its deck-to-discard route.');
   if (!(await page.locator('.table-action-cue').textContent())?.includes('Deck')) throw new Error('Forced discard confirmation is unclear.');
   await page.screenshot({ path: 'output/playwright/iteration/zero-card-forced-discard.png' });
   await page.waitForTimeout(1_000);

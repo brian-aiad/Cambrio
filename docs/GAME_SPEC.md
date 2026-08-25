@@ -9,7 +9,7 @@ This document is authoritative. If UI copy or animation conflicts with this spec
 - Deal four hidden cards to each player. The discard pile starts empty. Each player may hold to inspect their two bottom cards once, then confirms readiness.
 - Every turn draws privately from the deck. The player either discards the drawn card or replaces one owned card with it; the replaced card becomes the discard.
 - A hand is a variable-length collection of stable spatial slots. The starting cards occupy top-left, top-right, bottom-left, and bottom-right. Existing cards never reflow when another card leaves; a vacant slot stays visible. A drawn replacement inherits the replaced card's slot, swaps exchange card identities without moving either table position, and a penalty or gift uses the first open slot.
-- A player may own at most six cards. A wrong stack may take a player from five to six cards. At six cards, that player cannot initiate another stack attempt until their hand falls below the limit; this prevents penalty-free guess spam.
+- A player may own at most six cards. A wrong stack may take a player from five to six cards. A six-card player may still attempt a stack so the cap never traps them; a miss adds no seventh card and locks that player out only for the current discard. A new discard clears the lock.
 
 ## Optional powers
 
@@ -53,6 +53,7 @@ Every power enters target selection immediately after the power card is discarde
 
 - The server owns the deck, hidden card identities, timers, validation, race order, ending queue, and scores. Clients receive only personalized projections.
 - Turn actions time out after 45 seconds to a safe draw-discard or declined optional power. Mandatory card gifts time out to a random legal card.
-- A required turn pauses for a disconnected player for 60 seconds, then safe auto-play begins. The player may reconnect; the host may remove them as a forfeit.
+- Any disconnected seated player pauses the entire active round. The server snapshots the exact remaining initial-peek, turn, power, or transfer time; no cards, races, powers, or timeouts can advance while paused. The seat is preserved, and the saved clock resumes only after every non-forfeited player has returned. The host may remove a player as a forfeit instead of waiting.
+- Socket rooms detect a dropped transport directly. The free hosted transport uses periodic presence heartbeats and marks a seat disconnected after 18 seconds without one. A hidden or reopened browser with the same identity reclaims the same seat rather than creating a duplicate.
 - Removing a player burns their cards unseen. They receive a game played and no win. Host authority transfers to the longest-connected remaining player.
 - Rooms return to the lobby after results and expire two hours after becoming empty.

@@ -76,6 +76,7 @@ export interface GameState {
   ending?: EndingState;
   stackOpen: boolean;
   discardGeneration: number;
+  stackLocks: Record<string, number>;
   temporaryReveals: Record<string, string[]>;
   results?: PlayerResult[];
   createdAt: number;
@@ -100,7 +101,7 @@ export type GameCommand =
   | { type: 'TIMEOUT'; playerId: string };
 
 export interface GameEffect {
-  type: 'peek' | 'power' | 'penalty' | 'stack' | 'transfer' | 'cambio' | 'turn' | 'results' | 'forfeit';
+  type: 'peek' | 'power' | 'penalty' | 'stack_lock' | 'stack' | 'transfer' | 'cambio' | 'turn' | 'results' | 'forfeit';
   playerId?: string;
   message?: string;
   cardIds?: string[];
@@ -139,9 +140,14 @@ export interface GameView {
   discard?: CardView;
   stackOpen: boolean;
   discardGeneration: number;
+  stackLocked?: boolean;
   activePlayerId?: string;
   turnStage?: TurnStage;
   deadlineAt?: number;
+  paused?: {
+    playerIds: string[];
+    remainingMs: number;
+  };
   drawnCard?: CardView;
   power?: PowerState;
   transfer?: TransferState;
@@ -224,6 +230,7 @@ export function createGame(
     turnOrder: players.map((player) => player.id),
     stackOpen: false,
     discardGeneration: 0,
+    stackLocks: {},
     temporaryReveals: {},
     createdAt: now,
   };
@@ -342,12 +349,18 @@ export function applyGameCommand(
         fail('STACK_CLOSED', 'That discard is no longer stackable.');
       }
       if (player.cards.length === 0) fail('NO_CARDS', 'A zero-card player cannot stack.');
-      if (player.cards.length >= MAX_HAND_CARDS) fail('HAND_LIMIT', 'You cannot attempt a stack while holding six cards.');
+      state.stackLocks ??= {};
+      if (state.stackLocks[player.id] === state.discardGeneration) fail('STACK_LOCKED', 'Wait for the next discard before stacking again.');
       const owner = state.players.find((candidate) => candidate.cards.includes(command.targetCardId) && !candidate.forfeited);
       if (!owner) fail('BAD_TARGET', 'That table card is not available.');
       const top = state.discard.at(-1);
       if (!top) fail('NO_DISCARD', 'There is no active discard.');
       if (state.cards[command.targetCardId].rank !== state.cards[top].rank) {
+        if (player.cards.length >= MAX_HAND_CARDS) {
+          state.stackLocks[player.id] = state.discardGeneration;
+          effects.push({ type: 'stack_lock', playerId: player.id, message: `${player.name} missed and must wait for the next discard.` });
+          break;
+        }
         const penalty = drawCard(state, random);
         if (!penalty) {
           finishRound(state);
@@ -432,6 +445,7 @@ export function projectGame(state: GameState, viewerId: string): GameView {
     discard: top ? cardView(top, -1, true) : undefined,
     stackOpen: state.stackOpen,
     discardGeneration: state.discardGeneration,
+    stackLocked: (state.stackLocks ?? {})[viewerId] === state.discardGeneration,
     activePlayerId: state.turn?.playerId,
     turnStage: state.turn?.stage,
     deadlineAt: state.transfer?.deadlineAt ?? state.turn?.deadlineAt,

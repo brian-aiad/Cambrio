@@ -19,7 +19,7 @@ async (page) => {
   await page.waitForTimeout(130);
   await page.screenshot({ path: `${root}/stack-correct-transfer-390x844.png` });
   if (await page.locator('.card-flight').count() !== 1) throw new Error('Successful stack did not animate the selected card to discard.');
-  if (!(await page.locator('.flight-endpoint em').textContent())?.includes('Alex BR')) throw new Error('Successful stack did not label its exact source slot.');
+  if ((await page.locator('.card-flight').getAttribute('data-flight-from')) !== 'Alex BR' || (await page.locator('.card-flight').getAttribute('data-flight-to')) !== 'Discard') throw new Error('Successful stack did not preserve its exact Alex BR to discard route.');
   if (await page.locator('.table-action-cue').count() !== 0) throw new Error('Stack flight added a redundant swap caption over the stack result.');
   if (await page.locator('[aria-label="Alex\'s cards"] .playing-card').count() !== 3) throw new Error('Successful stack did not remove the exact opponent card.');
   if (await page.locator('.stack-result.correct').count() !== 1) throw new Error('Successful stack feedback is not visible.');

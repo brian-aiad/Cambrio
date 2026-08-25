@@ -165,26 +165,119 @@ describe('RoomManager integration', () => {
     expect(room.hostPlayerId).toBe(guestMembership.playerId);
   });
 
-  it('times out every unfinished initial peek, then waits through disconnect grace before auto-playing', async () => {
-    const { manager, hostMembership } = await startedRoom();
-    let room = (await manager.get(hostMembership.roomCode))!;
-    let now = room.initialPeekDeadlineAt! + 1;
-    while (room.game?.phase === 'initial_peek') {
-      await manager.tick(now);
+  it('uses hosted heartbeats to pause stale seats and resume the exact initial-peek clock', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(12_000_000);
+    try {
+      const { manager, hostMembership, guestMembership } = await startedRoom();
+      await manager.heartbeat(hostMembership.roomCode, hostMembership.playerId, 12_000_000, 18_000);
+      await manager.heartbeat(guestMembership.roomCode, guestMembership.playerId, 12_000_000, 18_000);
+      let room = (await manager.get(hostMembership.roomCode))!;
+      const originalDeadline = room.initialPeekDeadlineAt!;
+
+      const staleAt = 12_018_001;
+      await manager.heartbeat(hostMembership.roomCode, hostMembership.playerId, staleAt, 18_000);
       room = (await manager.get(hostMembership.roomCode))!;
-      now = room.initialPeekDeadlineAt! + 1;
+      expect(room.players.find((player) => player.id === guestMembership.playerId)?.connected).toBe(false);
+      expect(manager.view(room, hostMembership.playerId).game?.paused).toEqual({
+        playerIds: [guestMembership.playerId],
+        remainingMs: originalDeadline - staleAt,
+      });
+
+      await manager.tick(staleAt + 5 * 60_000);
+      expect((await manager.get(room.code))!.game?.phase).toBe('initial_peek');
+      const returnedAt = staleAt + 5 * 60_000 + 1;
+      await manager.heartbeat(hostMembership.roomCode, hostMembership.playerId, returnedAt - 1, 18_000);
+      await manager.heartbeat(guestMembership.roomCode, guestMembership.playerId, returnedAt, 18_000);
+      room = (await manager.get(room.code))!;
+      expect(room.pause).toBeUndefined();
+      expect(room.initialPeekDeadlineAt).toBe(returnedAt + originalDeadline - staleAt);
+    } finally {
+      clock.mockRestore();
     }
-    expect(room.game?.phase).toBe('playing');
-    const timedPlayerId = room.game!.turn!.playerId;
-    await manager.disconnect(room.code, timedPlayerId);
-    room = (await manager.get(room.code))!;
-    const grace = room.disconnectGrace[timedPlayerId];
-    await manager.tick(grace - 1);
-    expect((await manager.get(room.code))!.game!.turn!.playerId).toBe(timedPlayerId);
-    await manager.tick(grace + 1);
-    room = (await manager.get(room.code))!;
-    expect(room.game!.turn!.playerId).not.toBe(timedPlayerId);
-    expect(room.game!.discard).toHaveLength(1);
+  });
+
+  it('waits for every disconnected seat before resuming a multi-disconnect pause', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(15_000_000);
+    try {
+      const { manager, hostMembership, guestMembership } = await startedRoom();
+      const room = (await manager.get(hostMembership.roomCode))!;
+      const remaining = room.initialPeekDeadlineAt! - 15_000_000;
+      await manager.disconnect(room.code, hostMembership.playerId);
+      await manager.disconnect(room.code, guestMembership.playerId);
+      expect(manager.view((await manager.get(room.code))!, hostMembership.playerId).game?.paused?.playerIds.sort()).toEqual([hostMembership.playerId, guestMembership.playerId].sort());
+
+      clock.mockReturnValue(15_120_000);
+      await manager.handleRoomAction(guest, undefined, roomAction({ type: 'ROOM_JOIN', code: room.code, name: 'Guest Back' }));
+      expect((await manager.get(room.code))!.pause).toBeDefined();
+
+      clock.mockReturnValue(15_180_000);
+      await manager.handleRoomAction(host, undefined, roomAction({ type: 'ROOM_JOIN', code: room.code, name: 'Host Back' }));
+      const resumed = (await manager.get(room.code))!;
+      expect(resumed.pause).toBeUndefined();
+      expect(resumed.initialPeekDeadlineAt).toBe(15_180_000 + remaining);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('lets the connected host forfeit a disconnected seat instead of leaving the round stuck', async () => {
+    const { manager, hostMembership, guestMembership } = await startedRoom();
+    await manager.disconnect(hostMembership.roomCode, guestMembership.playerId);
+    let room = (await manager.get(hostMembership.roomCode))!;
+    expect(room.pause).toBeDefined();
+    await manager.handleRoomAction(host, hostMembership, roomAction({ type: 'ROOM_REMOVE', playerId: guestMembership.playerId }));
+    room = (await manager.get(hostMembership.roomCode))!;
+    expect(room.pause).toBeUndefined();
+    expect(room.phase).toBe('results');
+    expect(room.game?.results?.find((result) => result.playerId === hostMembership.playerId)?.winner).toBe(true);
+  });
+
+  it('freezes a disconnected seat indefinitely and restores its remaining turn time on rejoin', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(8_000_000);
+    try {
+      const { manager, hostMembership, guestMembership } = await startedRoom();
+      let room = (await manager.get(hostMembership.roomCode))!;
+      let now = room.initialPeekDeadlineAt! + 1;
+      while (room.game?.phase === 'initial_peek') {
+        clock.mockReturnValue(now);
+        await manager.tick(now);
+        room = (await manager.get(hostMembership.roomCode))!;
+        now = room.initialPeekDeadlineAt! + 1;
+      }
+      expect(room.game?.phase).toBe('playing');
+      const timedPlayerId = room.game!.turn!.playerId;
+      const timedMembership = timedPlayerId === hostMembership.playerId ? hostMembership : guestMembership;
+      const timedIdentity = timedPlayerId === hostMembership.playerId ? host : guest;
+      const otherMembership = timedPlayerId === hostMembership.playerId ? guestMembership : hostMembership;
+      clock.mockReturnValue(now);
+      const remaining = room.game!.turn!.deadlineAt - now;
+      await manager.disconnect(room.code, timedPlayerId);
+      room = (await manager.get(room.code))!;
+      expect(manager.view(room, otherMembership.playerId).game?.paused).toEqual({ playerIds: [timedPlayerId], remainingMs: remaining });
+
+      await manager.tick(now + 5 * 60_000);
+      room = (await manager.get(room.code))!;
+      expect(room.game!.turn!.playerId).toBe(timedPlayerId);
+      expect(room.game!.discard).toHaveLength(0);
+      await expect(manager.handleGameAction(otherMembership, gameAction({ type: 'CALL_CAMBIO' }, room.game!.version))).rejects.toMatchObject({ code: 'GAME_PAUSED' });
+
+      const rejoinedAt = now + 5 * 60_000 + 1;
+      clock.mockReturnValue(rejoinedAt);
+      const rejoined = await manager.handleRoomAction(timedIdentity, undefined, roomAction({ type: 'ROOM_JOIN', code: room.code, name: 'Back Again' }));
+      expect(rejoined.membership?.playerId).toBe(timedMembership.playerId);
+      room = (await manager.get(room.code))!;
+      expect(room.pause).toBeUndefined();
+      expect(room.game!.turn!.deadlineAt).toBe(rejoinedAt + remaining);
+
+      await manager.tick(room.game!.turn!.deadlineAt - 1);
+      expect((await manager.get(room.code))!.game!.turn!.playerId).toBe(timedPlayerId);
+      await manager.tick(room.game!.turn!.deadlineAt + 1);
+      room = (await manager.get(room.code))!;
+      expect(room.game!.turn!.playerId).not.toBe(timedPlayerId);
+      expect(room.game!.discard).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('applies a duplicate game action exactly once', async () => {

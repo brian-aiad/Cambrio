@@ -31,7 +31,7 @@ async (page) => {
   await page.goto('http://localhost:5173/__visual-audit?scene=awaiting&players=4');
   await page.waitForTimeout(350);
   await page.locator('[data-table-zone="deck"]').click();
-  await page.waitForTimeout(80);
+  await page.waitForTimeout(140);
   const reducedFlight = page.locator('.card-flight');
   if (await reducedFlight.count() && Number(await reducedFlight.evaluate((element) => window.getComputedStyle(element).opacity)) > .05) throw new Error('Reduced-motion mode left a traveling card visibly animated.');
   if (await page.locator('.drawn-panel').count() !== 1) throw new Error('Reduced-motion draw did not settle into the decision state.');

@@ -8,7 +8,8 @@ async (page) => {
     const hands = page.locator('.player-hand');
     if (await hands.count() !== 8 || !await hands.evaluateAll((items) => items.every((hand) => hand.querySelectorAll('.playing-card').length === 6))) throw new Error(`The maximum table did not preserve six cards per player at ${viewport.width}x${viewport.height}.`);
     if (await page.locator('.slot-tag').count() !== 48) throw new Error('The maximum table lost stable position labels.');
-    if (!(await page.locator('.stack-hint.limit').textContent())?.includes('6-CARD LIMIT')) throw new Error('The maximum hand does not explain why stacking is unavailable.');
+    if (!(await page.locator('.stack-hint').textContent())?.includes('STACK OPEN')) throw new Error('The maximum hand incorrectly disables stacking.');
+    if (await page.locator('.self-zone .playing-card.interactive').count() !== 6) throw new Error('The six-card player cannot select one of their own stack targets.');
     const geometry = await page.evaluate(() => {
       const box = (selector) => { const bounds = document.querySelector(selector)?.getBoundingClientRect(); return bounds && { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom }; };
       const overlap = (first, second) => Boolean(first && second && first.left < second.right && first.right > second.left && first.top < second.bottom && first.bottom > second.top);

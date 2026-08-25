@@ -15,8 +15,8 @@ async (page) => {
   await page.getByRole('button', { name: 'Swap', exact: true }).click();
   await page.waitForTimeout(100);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Black King swap did not launch both exact-position flights.');
-  const labels = await page.locator('.flight-endpoint em').allTextContents();
-  if (!labels.includes('Brian TR') || !labels.includes('Alex BL')) throw new Error(`Black King endpoints are unclear: ${labels.join(', ')}`);
+  const routes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));
+  if (!routes.includes('Brian TR -> Alex BL') || !routes.includes('Alex BL -> Brian TR')) throw new Error(`Black King routes are unclear: ${routes.join(', ')}`);
   await page.screenshot({ path: `${root}/black-king-refined-flight.png` });
   await page.waitForTimeout(1_100);
   if (await page.locator('.self-zone [data-card-id="p1-card-2"]').count() !== 1 || await page.locator('.opponent-rail [data-card-id="p0-card-1"]').count() !== 1) throw new Error('Black King cards did not settle in the chosen slots.');

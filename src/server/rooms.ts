@@ -30,6 +30,7 @@ export interface RoomPlayer {
   ready: boolean;
   connected: boolean;
   joinedAt: number;
+  lastSeenAt?: number;
   stats: StoredStats;
 }
 
@@ -41,6 +42,12 @@ export interface RoomRuntime {
   waiting: RoomPlayer[];
   game?: GameState;
   initialPeekDeadlineAt?: number;
+  pause?: {
+    startedAt: number;
+    initialPeekRemainingMs?: number;
+    turnRemainingMs?: number;
+    transferRemainingMs?: number;
+  };
   disconnectGrace: Record<string, number>;
   createdAt: number;
   expiresAt: number;
@@ -124,6 +131,7 @@ export class RoomManager {
         );
         room.phase = 'game';
         room.initialPeekDeadlineAt = now + INITIAL_PEEK_MS;
+        room.pause = undefined;
         room.recordedGameId = undefined;
         await this.save(room);
         result = { membership, message: 'The cards are dealt. Hold your two bottom cards to peek.' };
@@ -139,6 +147,8 @@ export class RoomManager {
           const transition = applyGameCommand(room.game, { type: 'FORFEIT_PLAYER', playerId: target.id }, Date.now(), secureRandom);
           room.game = transition.state;
           room.players = room.players.filter((candidate) => candidate.id !== target.id);
+          delete room.disconnectGrace[target.id];
+          this.refreshPauseAfterTableChange(room, Date.now());
           await this.afterTransition(room, transition.effects);
           result = { membership, effects: transition.effects };
         } else {
@@ -156,6 +166,7 @@ export class RoomManager {
         room.phase = 'lobby';
         room.game = undefined;
         room.initialPeekDeadlineAt = undefined;
+        room.pause = undefined;
         for (const candidate of room.players) candidate.ready = candidate.id === room.hostPlayerId;
         this.promoteWaiting(room);
         await this.save(room);
@@ -193,6 +204,7 @@ export class RoomManager {
     const { room, player } = this.requireMembership(membership);
     if (!room.game || (room.phase !== 'game' && room.phase !== 'results')) throw new GameRuleError('NO_GAME', 'There is no active game.');
     if (room.waiting.some((candidate) => candidate.id === player.id)) throw new GameRuleError('WAITING', 'Waiting players cannot act in the current game.');
+    if (room.pause) throw new GameRuleError('GAME_PAUSED', 'The round is paused while a player reconnects.');
     // Stack attempts have their own discard-generation lock and initial peeks
     // are intentionally concurrent per player. Reveal completion/concealment
     // must also survive a simultaneous stack mutation. Other turn and power
@@ -237,9 +249,50 @@ export class RoomManager {
       this.promoteWaiting(room);
     } else if (room.game && room.game.players.some((candidate) => candidate.id === player.id)) {
       room.game = applyGameCommand(room.game, { type: 'SET_CONNECTED', playerId, connected: false }, Date.now(), secureRandom).state;
+      this.pauseForDisconnectedPlayers(room, Date.now());
     }
     if (room.hostPlayerId === player.id && explicitLeave) this.transferHost(room);
     if (![...room.players, ...room.waiting].some((candidate) => candidate.connected)) room.expiresAt = Date.now() + ROOM_TTL_MS;
+    await this.save(room);
+  }
+
+  async reconnect(code: string, playerId: string): Promise<void> {
+    const room = await this.get(code);
+    if (!room) return;
+    const player = [...room.players, ...room.waiting].find((candidate) => candidate.id === playerId);
+    if (!player) return;
+    player.connected = true;
+    delete room.disconnectGrace[player.id];
+    if (room.game?.players.some((candidate) => candidate.id === player.id)) {
+      room.game = applyGameCommand(room.game, { type: 'SET_CONNECTED', playerId, connected: true }, Date.now(), secureRandom).state;
+    }
+    this.resumeIfEveryoneReturned(room, Date.now());
+    await this.save(room);
+  }
+
+  async heartbeat(code: string, playerId: string, now: number, staleAfterMs: number): Promise<void> {
+    const room = await this.get(code);
+    if (!room) return;
+    const player = [...room.players, ...room.waiting].find((candidate) => candidate.id === playerId);
+    if (!player) return;
+    player.lastSeenAt = now;
+    if (!player.connected) {
+      player.connected = true;
+      delete room.disconnectGrace[player.id];
+      if (room.game?.players.some((candidate) => candidate.id === player.id)) {
+        room.game = applyGameCommand(room.game, { type: 'SET_CONNECTED', playerId, connected: true }, now, secureRandom).state;
+      }
+    }
+    for (const candidate of [...room.players, ...room.waiting]) {
+      if (candidate.id === playerId || !candidate.connected || candidate.lastSeenAt === undefined || now - candidate.lastSeenAt <= staleAfterMs) continue;
+      candidate.connected = false;
+      room.disconnectGrace[candidate.id] = now + RECONNECT_GRACE_MS;
+      if (room.game?.players.some((enginePlayer) => enginePlayer.id === candidate.id)) {
+        room.game = applyGameCommand(room.game, { type: 'SET_CONNECTED', playerId: candidate.id, connected: false }, now, secureRandom).state;
+      }
+    }
+    this.pauseForDisconnectedPlayers(room, now);
+    this.resumeIfEveryoneReturned(room, now);
     await this.save(room);
   }
 
@@ -266,6 +319,12 @@ export class RoomManager {
       }
       const game = room.game;
       if (!game || game.phase === 'results') continue;
+      if (room.pause) {
+        if (this.disconnectedGamePlayerIds(room).length > 0) continue;
+        this.resumeIfEveryoneReturned(room, now);
+        await this.save(room);
+        changed.push(room.code);
+      }
       let timedPlayerId: string | undefined;
       if (game.phase === 'initial_peek' && room.initialPeekDeadlineAt && room.initialPeekDeadlineAt <= now) {
         timedPlayerId = game.players.find((player) => !player.initialPeekComplete && !player.forfeited)?.id;
@@ -275,9 +334,8 @@ export class RoomManager {
         timedPlayerId = game.turn?.playerId;
       }
       if (!timedPlayerId) continue;
-      const roomPlayer = room.players.find((player) => player.id === timedPlayerId);
       const engineDeadline = game.transfer?.deadlineAt ?? game.turn?.deadlineAt ?? room.initialPeekDeadlineAt ?? Infinity;
-      const due = roomPlayer?.connected ? now >= engineDeadline : now >= (room.disconnectGrace[timedPlayerId] ?? now + RECONNECT_GRACE_MS);
+      const due = now >= engineDeadline;
       if (!due) continue;
       try {
         const transition = applyGameCommand(game, { type: 'TIMEOUT', playerId: timedPlayerId }, now, secureRandom);
@@ -320,6 +378,13 @@ export class RoomManager {
       joinedAt: candidate.joinedAt,
       stats: candidate.stats,
     });
+    const game = !isWaiting && room.game ? projectGame(room.game, playerId) : undefined;
+    if (game && room.pause) {
+      game.paused = {
+        playerIds: this.disconnectedGamePlayerIds(room),
+        remainingMs: this.pausedRemainingMs(room),
+      };
+    }
     return {
       code: room.code,
       phase: room.phase,
@@ -327,7 +392,7 @@ export class RoomManager {
       hostPlayerId: room.hostPlayerId,
       players: room.players.map(mapPlayer),
       waiting: room.waiting.map(mapPlayer),
-      game: !isWaiting && room.game ? projectGame(room.game, playerId) : undefined,
+      game,
       expiresAt: room.expiresAt,
     };
   }
@@ -373,6 +438,7 @@ export class RoomManager {
       if (room.game?.players.some((candidate) => candidate.id === existing.id)) {
         room.game = applyGameCommand(room.game, { type: 'SET_CONNECTED', playerId: existing.id, connected: true }, Date.now(), secureRandom).state;
       }
+      this.resumeIfEveryoneReturned(room, Date.now());
       await this.save(room);
       return { membership: { roomCode: room.code, playerId: existing.id, waiting }, message: 'Reconnected to the room.' };
     }
@@ -416,6 +482,7 @@ export class RoomManager {
   private async afterTransition(room: RoomRuntime, effects: GameEffect[]): Promise<void> {
     if (room.game?.phase === 'results') {
       room.phase = 'results';
+      room.pause = undefined;
       if (room.recordedGameId !== room.game.id) {
         const participants = room.game.results!.map((result) => {
           const enginePlayer = room.game!.players.find((player) => player.id === result.playerId)!;
@@ -452,6 +519,54 @@ export class RoomManager {
       candidate.ready = false;
       room.players.push(candidate);
     }
+  }
+
+  private disconnectedGamePlayerIds(room: RoomRuntime): string[] {
+    if (!room.game || room.game.phase === 'results') return [];
+    return room.game.players
+      .filter((enginePlayer) => !enginePlayer.forfeited)
+      .filter((enginePlayer) => !room.players.find((player) => player.id === enginePlayer.id)?.connected)
+      .map((player) => player.id);
+  }
+
+  private pauseForDisconnectedPlayers(room: RoomRuntime, now: number): void {
+    if (room.pause || !room.game || room.game.phase === 'results' || this.disconnectedGamePlayerIds(room).length === 0) return;
+    room.pause = {
+      startedAt: now,
+      initialPeekRemainingMs: room.game.phase === 'initial_peek' && room.initialPeekDeadlineAt !== undefined
+        ? Math.max(0, room.initialPeekDeadlineAt - now)
+        : undefined,
+      turnRemainingMs: room.game.turn ? Math.max(0, room.game.turn.deadlineAt - now) : undefined,
+      transferRemainingMs: room.game.transfer ? Math.max(0, room.game.transfer.deadlineAt - now) : undefined,
+    };
+  }
+
+  private resumeIfEveryoneReturned(room: RoomRuntime, now: number): void {
+    if (!room.pause || this.disconnectedGamePlayerIds(room).length > 0) return;
+    const minimumResumeMs = (remaining: number | undefined) => Math.max(1_000, remaining ?? 0);
+    if (room.game?.phase === 'initial_peek' && room.pause.initialPeekRemainingMs !== undefined) {
+      room.initialPeekDeadlineAt = now + minimumResumeMs(room.pause.initialPeekRemainingMs);
+    }
+    if (room.game?.turn && room.pause.turnRemainingMs !== undefined) {
+      room.game.turn.deadlineAt = now + minimumResumeMs(room.pause.turnRemainingMs);
+    }
+    if (room.game?.transfer && room.pause.transferRemainingMs !== undefined) {
+      room.game.transfer.deadlineAt = now + minimumResumeMs(room.pause.transferRemainingMs);
+    }
+    room.pause = undefined;
+  }
+
+  private refreshPauseAfterTableChange(room: RoomRuntime, now: number): void {
+    if (!room.pause) return;
+    room.pause = undefined;
+    this.pauseForDisconnectedPlayers(room, now);
+  }
+
+  private pausedRemainingMs(room: RoomRuntime): number {
+    if (!room.pause) return 0;
+    if (room.game?.phase === 'initial_peek') return room.pause.initialPeekRemainingMs ?? 0;
+    if (room.game?.transfer) return room.pause.transferRemainingMs ?? 0;
+    return room.pause.turnRemainingMs ?? 0;
   }
 
   private async save(room: RoomRuntime): Promise<void> {

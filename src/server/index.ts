@@ -25,6 +25,8 @@ const server = createServer(app);
 const corsOptions = clientOrigin ? { origin: clientOrigin, credentials: true } : undefined;
 const io = new Server<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>(server, {
   ...(corsOptions ? { cors: corsOptions } : {}),
+  pingInterval: 5_000,
+  pingTimeout: 7_000,
   connectionStateRecovery: { maxDisconnectionDuration: 120_000, skipMiddlewares: false },
 });
 
@@ -107,6 +109,10 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', (socket) => {
+  if (socket.recovered && socket.data.membership) {
+    const membership = socket.data.membership;
+    void rooms.reconnect(membership.roomCode, membership.playerId).then(() => broadcast(membership.roomCode));
+  }
   const packetTimes: number[] = [];
   const actionTimes = new Map<string, number>();
   const packetRateLimited = () => {
@@ -153,7 +159,7 @@ io.on('connection', (socket) => {
       clientActionId = action.clientActionId;
       if (rateLimited(clientActionId)) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
       const result = await rooms.handleGameAction(socket.data.membership, action);
-      const outcome = result.effects?.find((effect) => effect.type === 'stack' || effect.type === 'penalty')?.type;
+      const outcome = result.effects?.find((effect) => effect.type === 'stack' || effect.type === 'penalty' || effect.type === 'stack_lock')?.type;
       for (const effect of result.effects ?? []) {
         if (effect.message) io.to(roomChannel(socket.data.membership!.roomCode)).emit('notice', { kind: effect.type, message: effect.message, playerId: effect.playerId });
       }

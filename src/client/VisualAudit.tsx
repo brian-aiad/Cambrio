@@ -38,9 +38,9 @@ function CardGallery() {
 }
 
 function makeRoom(scene: string, playerCount: number): RoomView {
-  const players = Array.from({ length: playerCount }, (_, index) => makePlayer(index, scene === 'all-six' ? 6 : scene === 'six' && index === 0 ? 6 : scene === 'zero' && index === 0 ? 0 : 4));
+  const players = Array.from({ length: playerCount }, (_, index) => makePlayer(index, scene === 'all-six' ? 6 : (scene === 'six' || scene === 'six-wrong') && index === 0 ? 6 : scene === 'zero' && index === 0 ? 0 : 4));
   const self = players[0];
-  const activePlayerId = scene === 'opponent-turn' ? players[1].id : self.id;
+  const activePlayerId = scene === 'opponent-turn' || scene === 'paused' || scene === 'initial-paused' ? players[1].id : self.id;
   const game: GameView = {
     id: `audit-${scene}`,
     phase: scene === 'results' ? 'results' : scene.startsWith('initial') ? 'initial_peek' : scene === 'ending' ? 'ending' : 'playing',
@@ -49,7 +49,7 @@ function makeRoom(scene: string, playerCount: number): RoomView {
     players,
     deckCount: 38,
     discard: faceCard('discard-8', -1, '8', 'diamonds'),
-    stackOpen: scene === 'awaiting' || scene === 'opponent-turn' || scene === 'all-six' || scene.startsWith('stack-'),
+    stackOpen: scene === 'awaiting' || scene === 'opponent-turn' || scene === 'all-six' || scene === 'six-wrong' || scene.startsWith('stack-'),
     discardGeneration: 4,
     activePlayerId,
     turnStage: 'awaiting_draw',
@@ -75,6 +75,10 @@ function makeRoom(scene: string, playerCount: number): RoomView {
   }
   if (scene === 'ending') game.ending = { triggerPlayerId: players[1].id, reason: 'cambio', turnsRemaining: playerCount + 1 };
   if (scene === 'zero') game.ending = { triggerPlayerId: self.id, reason: 'zero_cards', turnsRemaining: playerCount };
+  if (scene === 'paused' || scene === 'initial-paused') {
+    players[1].connected = false;
+    game.paused = { playerIds: [players[1].id], remainingMs: 17_000 };
+  }
   if (scene === 'results') {
     players[0].cards.push({ id: 'p0-card-4', slot: 4 }, { id: 'p0-card-5', slot: 5 });
     players[1].cards.push({ id: 'p1-card-4', slot: 4 });
@@ -180,7 +184,12 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
     game.phase = 'ending';
     game.ending = { triggerPlayerId: self.id, reason: 'cambio', turnsRemaining: game.players.length + 1 };
   } else if (action.type === 'STACK_ATTEMPT' && action.targetCardId) {
-    if (scene === 'stack-wrong') {
+    if (scene === 'stack-wrong' || scene === 'six-wrong') {
+      if (self.cards.length >= 6) {
+        game.stackLocked = true;
+        game.version += 1;
+        return { room: next, outcome: 'stack_lock' };
+      }
       const slot = Math.max(3, ...self.cards.map((card) => card.slot)) + 1;
       self.cards.push({ id: `penalty-${slot}`, slot });
       game.version += 1;

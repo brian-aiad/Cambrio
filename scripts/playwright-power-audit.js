@@ -49,8 +49,8 @@ async (page) => {
   await page.getByRole('button', { name: 'Swap', exact: true }).click();
   await page.waitForTimeout(160);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Black King swap did not launch two exact-position card flights.');
-  const kingLabels = await page.locator('.flight-endpoint em').allTextContents();
-  if (!kingLabels.includes('Brian TR') || !kingLabels.includes('Alex BL')) throw new Error(`Black King flight endpoints are incomplete: ${kingLabels.join(', ')}`);
+  const kingRoutes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));
+  if (!kingRoutes.includes('Brian TR -> Alex BL') || !kingRoutes.includes('Alex BL -> Brian TR')) throw new Error(`Black King flight routes are incomplete: ${kingRoutes.join(', ')}`);
   await page.screenshot({ path: `${root}/black-king-swap-flight.png` });
   if (await page.locator('.self-zone [data-card-id="p1-card-2"]').count() !== 1) throw new Error('Black King swap did not preserve the selected self slot.');
   if (await page.locator('.opponent-rail [data-card-id="p0-card-1"]').count() !== 1) throw new Error('Black King swap did not preserve the selected opponent slot.');

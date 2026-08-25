@@ -6,10 +6,11 @@ async (page) => {
   const roomNames = ['Brian', 'Alex', 'Maya', 'Jordan', 'Sam', 'Chris', 'Taylor', 'Devin'];
   const guestContexts = [];
   const pages = [page];
+  const baseUrl = await page.evaluate(() => window.location.origin === 'null' ? 'http://localhost:5173' : window.location.origin);
 
   try {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('http://localhost:5173');
+    await page.goto(baseUrl);
     await page.getByRole('textbox', { name: 'Your display name' }).fill(roomNames[0]);
     await page.getByRole('button', { name: 'Create private room' }).click();
     await page.waitForURL(/\/room\/[A-HJ-NP-Z2-9]{8}$/);
@@ -51,13 +52,13 @@ async (page) => {
     await queuePage.getByRole('heading', { name: 'Round in progress.' }).waitFor();
     await queuePage.getByRole('button', { name: 'Leave queue' }).click();
     await queuePage.getByRole('heading', { name: 'Know your cards. Trust your read.' }).waitFor();
-    if (queuePage.url() !== 'http://localhost:5173/') throw new Error(`Leaving the active queue kept the stale room URL: ${queuePage.url()}`);
+    if (queuePage.url() !== `${baseUrl}/`) throw new Error(`Leaving the active queue kept the stale room URL: ${queuePage.url()}`);
 
     for (const playerPage of pages) await playerPage.setViewportSize({ width: 320, height: 568 });
     await page.waitForTimeout(250);
     if (await page.locator('.toast').count()) throw new Error('A lobby toast survived into the live game and covered the local hand.');
     if (await page.locator('.opponent-rail .player-hand').count() !== 7) throw new Error('The live eight-player table does not show seven opponents.');
-    const portraitOverflow = await page.evaluate(() => ({
+    const portraitGeometries = await Promise.all(pages.map((playerPage) => playerPage.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
       viewportWidth: window.innerWidth,
       bodyHeight: document.body.scrollHeight,
@@ -66,12 +67,14 @@ async (page) => {
         const box = element.getBoundingClientRect();
         return box.width > 0 && box.left >= -1 && box.right <= window.innerWidth + 1;
       }).length,
-    }));
-    if (portraitOverflow.bodyWidth > portraitOverflow.viewportWidth + 1 || portraitOverflow.visibleHands !== 7) throw new Error(`Eight-player portrait overflow: ${JSON.stringify(portraitOverflow)}`);
+    }))));
+    const badPortrait = portraitGeometries.find((geometry) => geometry.bodyWidth > geometry.viewportWidth + 1 || geometry.visibleHands !== 7);
+    if (badPortrait) throw new Error(`Eight-player portrait overflow: ${JSON.stringify(portraitGeometries)}`);
     await page.screenshot({ path: `${outputRoot}/real-8p-playing-320x568.png` });
 
     let observedSwapFlights = 0;
-    for (let turn = 0; turn < 6; turn += 1) {
+    const turnOwners = [];
+    for (let turn = 0; turn < 8; turn += 1) {
       let activePage;
       for (let attempt = 0; attempt < 30 && !activePage; attempt += 1) {
         for (const candidate of pages) {
@@ -83,6 +86,7 @@ async (page) => {
         if (!activePage) await page.waitForTimeout(100);
       }
       if (!activePage) throw new Error(`No active deck found for live turn ${turn + 1}.`);
+      turnOwners.push(roomNames[pages.indexOf(activePage)]);
 
       if (turn === 0) {
         const before = await activePage.locator('.deck-card:not(:disabled)').boundingBox();
@@ -95,11 +99,14 @@ async (page) => {
       await activePage.locator('.drawn-panel').waitFor();
       if (turn % 2 === 0) {
         await activePage.locator('.self-zone .playing-card.interactive').first().click();
-        await page.waitForTimeout(220);
-        const flightCounts = await Promise.all(pages.map((playerPage) => playerPage.locator('.swap-flight-layer.replace .card-flight').count()));
-        const visibleObservers = flightCounts.filter((count) => count === 2).length;
-        if (visibleObservers !== pages.length) throw new Error(`A two-way hand replacement was not animated for every player: ${flightCounts.join(',')}`);
-        observedSwapFlights += visibleObservers;
+        const observed = Array(pages.length).fill(false);
+        for (let sample = 0; sample < 18 && observed.some((value) => !value); sample += 1) {
+          const counts = await Promise.all(pages.map((playerPage) => playerPage.locator('.swap-flight-layer.replace .card-flight').count()));
+          counts.forEach((count, index) => { if (count === 2) observed[index] = true; });
+          if (observed.some((value) => !value)) await page.waitForTimeout(80);
+        }
+        if (observed.some((value) => !value)) throw new Error(`A two-way hand replacement was not animated for every player: ${observed.join(',')}`);
+        observedSwapFlights += observed.filter(Boolean).length;
       } else {
         await activePage.getByRole('button', { name: 'Discard', exact: true }).click();
         await activePage.waitForTimeout(180);
@@ -108,10 +115,13 @@ async (page) => {
       }
       await page.waitForTimeout(1_400);
     }
+    if (new Set(turnOwners).size !== 8) throw new Error(`A full rotation did not give every seat one turn: ${turnOwners.join(' -> ')}`);
 
     const reconnectPage = pages[4];
     await reconnectPage.context().setOffline(true);
-    await reconnectPage.getByText('Reconnecting').waitFor();
+    // Socket.IO detects an offline WebSocket on its heartbeat; the hosted HTTP
+    // transport detects it on the next two polls. Cover both without flaking.
+    await reconnectPage.getByText('Reconnecting').waitFor({ timeout: 45_000 });
     if (await reconnectPage.locator('.fatal-mark').count()) throw new Error('A temporary transport loss replaced the table with a fatal screen.');
     await reconnectPage.context().setOffline(false);
     await reconnectPage.getByText('Live').waitFor({ timeout: 10_000 });
@@ -125,7 +135,7 @@ async (page) => {
     if (landscapeOverflow.width > landscapeOverflow.viewport + 1) throw new Error(`Eight-player landscape overflow: ${JSON.stringify(landscapeOverflow)}`);
     await page.screenshot({ path: `${outputRoot}/real-8p-playing-844x390.png` });
 
-    return { players: pages.length, queueLifecycle: true, realTurns: 6, observedSwapFlights, portraitOverflow, landscapeOverflow, reconnect: true };
+    return { players: pages.length, queueLifecycle: true, realTurns: 8, turnOwners, observedSwapFlights, portraitGeometries, landscapeOverflow, reconnect: true };
   } finally {
     await Promise.all(guestContexts.map((context) => context.close()));
   }

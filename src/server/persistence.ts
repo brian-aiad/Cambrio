@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { Redis } from '@upstash/redis';
 
 export interface StoredProfile {
   userId: string;
@@ -178,7 +179,85 @@ export class SupabasePersistence implements Persistence {
   }
 }
 
+/**
+ * Serverless room storage for the Vercel deployment. Every request can land on
+ * a different function instance, so live room state must never depend on a
+ * process-local map. Profile/stat keys are deliberately separate from room
+ * snapshots so a two-hour room expiry cannot remove account history.
+ */
+export class RedisPersistence implements Persistence {
+  private client: Redis;
+
+  constructor(url: string, token: string) {
+    this.client = new Redis({ url, token });
+  }
+
+  async saveRoom(code: string, snapshot: unknown, version: number, expiresAt: number) {
+    const seconds = Math.max(1, Math.ceil((expiresAt - Date.now()) / 1_000));
+    await this.client.set(this.roomKey(code), { snapshot, version, expiresAt }, { ex: seconds });
+  }
+
+  async loadRoom<T>(code: string) {
+    const stored = await this.client.get<{ snapshot: T; expiresAt: number }>(this.roomKey(code));
+    if (!stored || stored.expiresAt <= Date.now()) return undefined;
+    return stored.snapshot;
+  }
+
+  async deleteRoom(code: string) {
+    await this.client.del(this.roomKey(code));
+  }
+
+  async getProfileByUser(userId: string) {
+    return (await this.client.get<StoredProfile>(`cambrio:profile:${userId}`)) ?? undefined;
+  }
+
+  async getProfileByHandle(handle: string) {
+    const userId = await this.client.get<string>(`cambrio:handle:${handle.toLowerCase()}`);
+    if (!userId) return undefined;
+    const profile = await this.getProfileByUser(userId);
+    return profile ? { ...profile, ...(await this.getStats(userId)) } : undefined;
+  }
+
+  async saveProfile(profile: StoredProfile) {
+    if (profile.handle) {
+      const handleKey = `cambrio:handle:${profile.handle.toLowerCase()}`;
+      const owner = await this.client.get<string>(handleKey);
+      if (owner && owner !== profile.userId) throw new Error('HANDLE_TAKEN');
+      await this.client.set(handleKey, profile.userId);
+    }
+    await this.client.set(`cambrio:profile:${profile.userId}`, profile);
+    return profile;
+  }
+
+  async getStats(userId: string) {
+    const stored = await this.client.hgetall<{ games?: number | string; wins?: number | string }>(`cambrio:stats:${userId}`);
+    const games = Number(stored?.games ?? 0);
+    const wins = Number(stored?.wins ?? 0);
+    return { games, wins, winRate: games ? Math.round((wins / games) * 1_000) / 10 : 0 };
+  }
+
+  async recordMatch(matchId: string, _code: string, participants: MatchParticipantRecord[]) {
+    const inserted = await this.client.set(`cambrio:match:${matchId}`, 1, { nx: true });
+    if (!inserted) return false;
+    const pipeline = this.client.pipeline();
+    for (const participant of participants) {
+      const key = `cambrio:stats:${participant.userId}`;
+      pipeline.hincrby(key, 'games', 1);
+      if (participant.winner) pipeline.hincrby(key, 'wins', 1);
+    }
+    await pipeline.exec();
+    return true;
+  }
+
+  private roomKey(code: string) {
+    return `cambrio:room:${code.toUpperCase()}`;
+  }
+}
+
 export function createPersistence(): Persistence {
+  const redisUrl = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL;
+  const redisToken = process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (redisUrl && redisToken) return new RedisPersistence(redisUrl, redisToken);
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   return url && key ? new SupabasePersistence(url, key) : new MemoryPersistence();

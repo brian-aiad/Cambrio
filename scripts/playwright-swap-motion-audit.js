@@ -8,8 +8,8 @@ async (page) => {
   await page.locator('[data-card-id="p0-card-0"]').click();
   await page.waitForTimeout(80);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('A drawn-card replacement did not launch both physical card movements.');
-  const replacementLabels = await page.locator('.flight-endpoint em').allTextContents();
-  if (!replacementLabels.includes('Brian TL') || !replacementLabels.includes('Drawn card')) throw new Error(`Replacement endpoints are unclear: ${replacementLabels.join(', ')}`);
+  const replacementRoutes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));
+  if (!replacementRoutes.includes('Brian TL -> Discard') || !replacementRoutes.includes('Drawn card -> Brian TL')) throw new Error(`Replacement routes are unclear: ${replacementRoutes.join(', ')}`);
   if (!(await page.locator('.table-action-cue').textContent())?.includes('Drawn card')) throw new Error('Replacement confirmation did not identify the incoming card.');
   await page.screenshot({ path: `${root}/drawn-replacement-mid-390x844.png` });
   await page.waitForTimeout(620);
@@ -24,8 +24,8 @@ async (page) => {
   await page.locator('.opponent-rail [data-card-id="p1-card-3"]').click();
   await page.waitForTimeout(80);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Blind swap did not launch two card flights.');
-  const blindLabels = await page.locator('.flight-endpoint em').allTextContents();
-  if (!blindLabels.includes('Brian TL') || !blindLabels.includes('Alex BR')) throw new Error(`Blind swap endpoints are unclear: ${blindLabels.join(', ')}`);
+  const blindRoutes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));
+  if (!blindRoutes.includes('Brian TL -> Alex BR') || !blindRoutes.includes('Alex BR -> Brian TL')) throw new Error(`Blind swap routes are unclear: ${blindRoutes.join(', ')}`);
   await page.screenshot({ path: `${root}/blind-swap-refined-mid-390x844.png` });
   await page.waitForTimeout(1200);
   if (await page.locator('.self-zone [data-card-id="p1-card-3"]').count() !== 1 || await page.locator('.opponent-rail [data-card-id="p0-card-0"]').count() !== 1) throw new Error('Blind swap did not settle into authoritative slots.');

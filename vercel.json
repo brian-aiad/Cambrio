@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist/client",
+  "regions": ["pdx1"],
+  "functions": {
+    "api/realtime.ts": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    { "source": "/room/:path*", "destination": "/index.html" },
+    { "source": "/u/:path*", "destination": "/index.html" },
+    { "source": "/__visual-audit", "destination": "/index.html" }
+  ]
+}

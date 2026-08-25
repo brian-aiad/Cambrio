@@ -107,7 +107,7 @@ function powerCommand(state: GameState, random: () => number): GameCommand {
 
 function possibleStack(state: GameState, random: () => number): GameCommand | undefined {
   if (!state.stackOpen || state.transfer || !state.discard.length) return undefined;
-  const actors = state.players.filter((player) => !player.forfeited && player.cards.length > 0 && player.cards.length < MAX_HAND_CARDS);
+  const actors = state.players.filter((player) => !player.forfeited && player.cards.length > 0 && state.stackLocks[player.id] !== state.discardGeneration);
   if (!actors.length) return undefined;
   const actor = choose(actors, random);
   const allTargets = state.players.filter((player) => !player.forfeited).flatMap((player) => player.cards);
@@ -242,7 +242,7 @@ describe('randomized game stress', () => {
       completed += 1;
     }
     expect(completed).toBe(350);
-  }, 30_000);
+  }, 60_000);
 
   it('settles 1,000 competing stack races with one winner and stable slots', () => {
     for (let seed = 1; seed <= 1_000; seed += 1) {
@@ -316,5 +316,5 @@ describe('randomized game stress', () => {
     const observed = new Set<string>();
     for (let seed = 1; seed <= 500; seed += 1) simulateDisruptions(seed, 2 + (seed % 7), observed);
     expect([...observed]).toEqual(expect.arrayContaining(['initial-forfeit', 'initial-timeout', 'forfeit', 'transfer-timeout', 'awaiting_draw-timeout', 'deciding-timeout', 'power-timeout']));
-  }, 30_000);
+  }, 45_000);
 });

@@ -131,7 +131,7 @@ describe('command safety matrix', () => {
     expect(result.state.players.find((player) => player.id === stacker.id)!.cards).not.toContain(target);
   });
 
-  it('caps a player at six cards and blocks risk-free stack spam at the limit', () => {
+  it('lets a six-card player stack, but locks a miss until the next discard without exceeding the cap', () => {
     let state = ready(2);
     const activeId = state.turn!.playerId;
     const actor = state.players.find((player) => player.id !== activeId)!;
@@ -144,8 +144,27 @@ describe('command safety matrix', () => {
       state = result.state;
     }
     expect(state.players.find((player) => player.id === actor.id)!.cards).toHaveLength(MAX_HAND_CARDS);
-    expect(() => applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: actor.id, targetCardId: wrongTarget, discardGeneration: state.discardGeneration }, 2_200, random)).toThrowError(/six cards/i);
-    expect(state.players.find((player) => player.id === actor.id)!.cards).toHaveLength(MAX_HAND_CARDS);
+    const missAtCap = applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: actor.id, targetCardId: wrongTarget, discardGeneration: state.discardGeneration }, 2_200, random);
+    expect(missAtCap.effects.some((effect) => effect.type === 'stack_lock')).toBe(true);
+    expect(missAtCap.state.players.find((player) => player.id === actor.id)!.cards).toHaveLength(MAX_HAND_CARDS);
+    expect(() => applyGameCommand(missAtCap.state, { type: 'STACK_ATTEMPT', playerId: actor.id, targetCardId: wrongTarget, discardGeneration: state.discardGeneration }, 2_300, random)).toThrowError(/next discard/i);
+  });
+
+  it('removes a matching card when the stacker begins at the six-card cap', () => {
+    let state = ready(2);
+    const activeId = state.turn!.playerId;
+    const actor = state.players.find((player) => player.id !== activeId)!;
+    const target = actor.cards[0];
+    const wrongRank = state.cards[target].rank === '6' ? '5' : '6';
+    state = drawAndDiscard(state, wrongRank);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      state = applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: actor.id, targetCardId: target, discardGeneration: state.discardGeneration }, 2_100 + attempt, random).state;
+    }
+    const top = state.discard.at(-1)!;
+    state.cards[target].rank = state.cards[top].rank;
+    const success = applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: actor.id, targetCardId: target, discardGeneration: state.discardGeneration }, 2_200, random);
+    expect(success.effects.some((effect) => effect.type === 'stack')).toBe(true);
+    expect(success.state.players.find((player) => player.id === actor.id)!.cards).toHaveLength(MAX_HAND_CARDS - 1);
   });
 });
 

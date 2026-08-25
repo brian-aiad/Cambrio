@@ -9,8 +9,8 @@ async (page) => {
     await page.locator('.opponent-rail [data-card-id="p7-card-3"]').click();
     await page.waitForTimeout(80);
     if (await page.locator('.card-flight').count() !== 2) throw new Error(`Eight-player swap failed to launch at ${viewport.width}x${viewport.height}.`);
-    const labels = await page.locator('.flight-endpoint em').allTextContents();
-    if (!labels.includes('Brian TL') || !labels.includes('Devin BR')) throw new Error(`Far-seat endpoints are unclear: ${labels.join(', ')}`);
+    const routes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));
+    if (!routes.includes('Brian TL -> Devin BR') || !routes.includes('Devin BR -> Brian TL')) throw new Error(`Far-seat routes are unclear: ${routes.join(', ')}`);
     const pathDistances = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => Number(element.getAttribute('data-flight-distance'))));
     if (pathDistances.some((distance) => distance < 55)) throw new Error(`Far-seat paths are too short at ${viewport.width}x${viewport.height}: ${pathDistances.join(', ')}px.`);
     await page.waitForTimeout(420);

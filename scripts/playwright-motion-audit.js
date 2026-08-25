@@ -8,8 +8,8 @@ async (page) => {
   await page.locator('[data-card-id="p0-card-0"]').evaluate((element) => (element).click());
   await page.waitForTimeout(90);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('A hand replacement did not launch both physical card movements.');
-  const replacementLabels = await page.locator('.flight-endpoint em').allTextContents();
-  if (!replacementLabels.includes('Brian TL') || !replacementLabels.includes('Drawn card')) throw new Error(`Hand replacement endpoints are incomplete: ${replacementLabels.join(', ')}`);
+  const replacementRoutes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));
+  if (!replacementRoutes.includes('Brian TL -> Discard') || !replacementRoutes.includes('Drawn card -> Brian TL')) throw new Error(`Hand replacement routes are incomplete: ${replacementRoutes.join(', ')}`);
   await page.screenshot({ path: `${outputRoot}/drawn-swap-mid-390x844.png` });
   const visibleDecisionLayers = await page.locator('.drawn-panel, .stack-hint').evaluateAll((elements) => elements.filter((element) => Number(window.getComputedStyle(element).opacity) > 0.1).length);
   if (visibleDecisionLayers > 1) throw new Error('Draw and stack decision layers visibly overlap.');
@@ -27,8 +27,8 @@ async (page) => {
   await page.locator('.opponent-rail [data-card-id="p1-card-3"]').evaluate((element) => (element).click());
   await page.waitForTimeout(90);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Blind swap did not launch two spatial card flights.');
-  const endpointLabels = await page.locator('.flight-endpoint em').allTextContents();
-  if (!endpointLabels.includes('Brian TL') || !endpointLabels.includes('Alex BR')) throw new Error(`Blind swap endpoint labels are incomplete: ${endpointLabels.join(', ')}`);
+  const routes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));
+  if (!routes.includes('Brian TL -> Alex BR') || !routes.includes('Alex BR -> Brian TL')) throw new Error(`Blind swap routes are incomplete: ${routes.join(', ')}`);
   if (await page.locator('.table-action-cue').evaluate((element) => Number(window.getComputedStyle(element).opacity) > 0.1)) throw new Error('Swap caption covered the opening card movement.');
   await page.screenshot({ path: `${outputRoot}/blind-swap-mid-390x844.png` });
   await page.waitForTimeout(700);
@@ -41,8 +41,8 @@ async (page) => {
   await page.locator('.opponent-rail [data-card-id="p7-card-3"]').evaluate((element) => (element).click());
   await page.waitForTimeout(90);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Eight-player swap did not launch both card flights.');
-  const eightLabels = await page.locator('.flight-endpoint em').allTextContents();
-  if (!eightLabels.includes('Brian TL') || !eightLabels.includes('Devin BR')) throw new Error(`Eight-player endpoints are ambiguous: ${eightLabels.join(', ')}`);
+  const eightRoutes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));
+  if (!eightRoutes.includes('Brian TL -> Devin BR') || !eightRoutes.includes('Devin BR -> Brian TL')) throw new Error(`Eight-player routes are ambiguous: ${eightRoutes.join(', ')}`);
   const earlyBoxes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => { const box = element.getBoundingClientRect(); return { x: box.x, y: box.y }; }));
   await page.screenshot({ path: `${outputRoot}/blind-swap-8p-launch-390x844.png` });
   await page.waitForTimeout(430);

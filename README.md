@@ -26,12 +26,16 @@ npm run stress:actions
 
 `npm run check` runs linting, strict TypeScript checks, the deterministic rules suite, 350 randomized full games across every supported room size, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run smoke:reconnect` interrupts a live transport and verifies that the same player returns to exactly one seat. `npm run stress:actions` attacks duplicate and mutually exclusive realtime actions. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
 
-## Production
+## Free production hosting
 
-1. Connect the GitHub repository in Supabase with working directory `.` and enable **Deploy to production**. The migration under `supabase/migrations/` is then applied from `main`.
-2. Enable anonymous sign-ins, Google OAuth, email magic links, and manual identity linking. Configure Cloudflare Turnstile in Supabase Auth before setting `VITE_TURNSTILE_SITE_KEY`.
-3. In Render, create a Blueprint from this repository. [`render.yaml`](render.yaml) provisions the single Node web service, production build, health check, and same-origin realtime endpoint. Supply the four requested Supabase values; leave `VITE_SERVER_URL` and `CLIENT_ORIGIN` unset when the client and server share the Render domain.
-4. Keep one service replica for v1. Multiple replicas require a Socket.IO Redis adapter because an in-flight room must have one authoritative process. Add `VITE_TURNSTILE_SITE_KEY` separately only after Turnstile is configured in Supabase Auth.
+The production site is deployed from `main` to `https://cambrio.vercel.app`. Vercel serves the React client and the `/api/realtime` serverless route; a free Upstash Redis database stores authoritative room checkpoints and serializes simultaneous moves.
+
+1. Import this GitHub repository into a free Vercel project.
+2. Add `VITE_HTTP_TRANSPORT=true`, `KV_REST_API_URL`, and `KV_REST_API_TOKEN` to the Production environment. Keep the deployment on free plans with automatic paid upgrades disabled.
+3. Add the optional Supabase URL and keys only when accounts, persistent profiles, and match history are required. Guest rooms work without account setup.
+4. Push to `main`; Vercel builds and promotes the new deployment automatically.
+
+The hosted transport polls only the viewer-specific room projection. Periodic presence heartbeats pause an active round when a browser disappears and restore the same seat and remaining clock when it returns. Local development continues to use Socket.IO for faster feedback unless `VITE_HTTP_TRANSPORT=true` is set.
 
 Do not commit the database password, service-role key, Supabase access token, or Turnstile secret. Only the Supabase project URL, publishable/anon key, and Turnstile site key belong in `VITE_*` variables.
 

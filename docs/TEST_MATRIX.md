@@ -10,9 +10,9 @@ This matrix records the release checks for the server-authoritative rules and th
 | Initial knowledge | Stable TL/TR/BL/BR slots, only BL/BR revealed during the hold, reveal removed on release, no other client receives ranks. |
 | Turn safety | Out-of-turn draw, discard before draw, swapping a foreign card, zero-card auto-discard, duplicate action replay, every timeout stage. |
 | Powers | 7/8 own peek; 9/10 opponent peek; J/Q blind swap; both black Kings reveal/conceal/keep/swap; both red Kings have no power; decline, timeout, concurrent target movement, and every power with zero cards. Black King values are removed from the client projection before Swap/Keep appears. |
-| Stacking | Rank match across suits, wrong guess plus unseen penalty, retry after a miss, strict six-card ceiling, blocked risk-free guesses at the ceiling, 1,000 first-winner races, stale-generation rejection, one success only, direct own/opponent targeting, stable vacant slots, mandatory gift, gift timeout, zero-card restriction, and per-player guess throttling. |
+| Stacking | Rank match across suits, wrong guess plus unseen penalty, retry after a miss, strict six-card ceiling, valid stacks at the ceiling, one-discard lock after a ceiling miss, 1,000 first-winner races, stale-generation rejection, one success only, direct own/opponent targeting, stable vacant slots, mandatory gift, gift timeout, zero-card restriction, and per-player guess throttling. |
 | Ending | Cambio during another turn, zero during own/another turn, later trigger rejection, complete final rotation, zero-card final turns, ties, forfeit, and reveal/scoring. |
-| Multiplayer | 2–8 active players, ninth player waiting, immediate FIFO promotion when a lobby seat opens, rematch promotion, explicit queue departure without ghost seats, reconnect without duplication, host preserved during reconnect grace, host transfer after grace/leave, checkpoint restoration, stale action/checkpoint rejection. |
+| Multiplayer | 2–8 active players, ninth player waiting, immediate FIFO promotion when a lobby seat opens, rematch promotion, explicit queue departure without ghost seats, reconnect without duplication, whole-round disconnect pause, frozen/restored phase clocks, hosted heartbeat expiry, host preserved during reconnect grace, host transfer after grace/leave, checkpoint restoration, stale action/checkpoint rejection. |
 | Projection security | Every personalized view is checked after every transition in 350 seeded full games. Only a viewer's temporary reveals and private drawn/power/transfer state are present; results and the public discard are the only forced reveals. |
 
 ## Stress passes
@@ -23,7 +23,7 @@ This matrix records the release checks for the server-authoritative rules and th
 - 25 simultaneous duplicate draws coalesced to one mutation with consistent acknowledgements; 25 unique discard taps accepted exactly once; 20 duplicate Cambrio calls started one ending sequence.
 - 96 live Socket.IO clients in 12 simultaneous full rooms for the normal smoke.
 - 400 live Socket.IO clients in 50 simultaneous full rooms for the release load pass.
-- Live transport interruption and recovery with the same player ID, exactly one restored seat, and preserved normalized name.
+- Live transport interruption freezes all actions and the exact remaining timer; recovery restores the same player ID, one seat, normalized name, and saved clock.
 - Global game-version checks reject delayed turn/power decisions; discard-generation checks keep legitimate stack races concurrent.
 
 ## Eight-player layout audit
@@ -44,7 +44,7 @@ The deterministic Playwright harness captures 50 state/device combinations: the 
 
 The full-lobby browser audit creates eight isolated identities at both 320×568 and 390×844. It verifies two stable seat columns, all eight visible tiles, no horizontal overflow, an in-viewport deal control, and coalescing of three immediate deal taps into one initial-peek round. Power audits verify numbered source/destination markers, visual completed/current steps, two concealed Black King endpoints, and all 28 legal opponent-card targets in an eight-player blind swap without repeated dense-rail badges.
 
-Two live-browser acceptance flows exercise the actual Socket.IO application rather than deterministic fixtures. One creates eight isolated seated identities plus a ninth queued identity, verifies the full-table and active-round queue states, leaves that queue cleanly, completes the private BL/BR peeks, drives six real turns, verifies every client receives each spatial card flight, forces one browser offline and back to **Live**, reloads that seated player, and checks 320×568 plus 844×390 overflow. The other adds a third player during a two-player round, completes a Cambrio ending, verifies both result projections reveal and score the same round without stale notices, promotes the waiting player into the rematch lobby, returns a host-removed player home with a clear explanation, and verifies a voluntary seated-player leave.
+Two live-browser acceptance flows exercise the actual Socket.IO application rather than deterministic fixtures. One creates eight isolated seated identities plus a ninth queued identity, verifies the full-table and active-round queue states, leaves that queue cleanly, completes the private BL/BR peeks, drives all eight real turns, verifies every client receives each spatial card flight, disconnects a seated browser, asserts the whole table and timer freeze, rejoins the exact seat, and checks 320×568 plus 844×390 overflow. The other adds a third player during a two-player round, completes a Cambrio ending, verifies both result projections reveal and score the same round without stale notices, promotes the waiting player into the rematch lobby, returns a host-removed player home with a clear explanation, and verifies a voluntary seated-player leave.
 
 ## Release commands
 
