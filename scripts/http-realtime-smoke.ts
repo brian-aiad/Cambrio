@@ -106,12 +106,19 @@ try {
   const race = await Promise.all(clients.map((client) => gameAction(client, { type: 'STACK_ATTEMPT', targetCardId: matchingCard, discardGeneration: generation })));
   if (race.filter((result) => result.ack?.ok && result.ack.outcome === 'stack').length !== 1) throw new Error('The distributed stack race did not produce exactly one winner.');
 
+  const removedMembership = clients[7].membership!;
+  const removal = await roomAction(clients[0], { type: 'ROOM_REMOVE', playerId: removedMembership.playerId });
+  if (!removal.ack?.ok) throw new Error(`The host could not remove a seat: ${removal.ack?.message}`);
+  const removedSync = await call(clients[7], { operation: 'sync', membership: removedMembership });
+  if (removedSync.left?.message !== 'The host removed your seat from this table.') throw new Error(`Hosted removal lost its explanation: ${removedSync.left?.message}`);
+
   console.log(JSON.stringify({
     players: 8,
     concurrentJoins: 'serialized',
     rapidDeals: `${starts.length} requests / 1 round`,
     privateProjections: 'no leaked ranks, suits, or face IDs',
     stackRace: '8 requests / 1 winner',
+    hostRemoval: 'removed player receives the exact reason',
     storage: 'Upstash free',
   }));
 } finally {

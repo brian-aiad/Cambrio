@@ -56,12 +56,12 @@ async function synchronize(identity: ServerIdentity, membership?: Membership, pr
   if (!membership) return { connected: true };
   const manager = new RoomManager(createPersistence());
   const room = await manager.get(membership.roomCode);
-  if (!room || !ownsSeat(room, membership, identity)) return { connected: true, left: { message: 'This room expired or your seat is no longer available.' } };
+  if (!room || !ownsSeat(room, membership, identity)) return { connected: true, left: membershipLoss(room, membership) };
   if (presence || nextDeadline(room) <= Date.now()) {
     return withRoomLock(membership.roomCode, async () => {
       const lockedManager = new RoomManager(createPersistence());
       let lockedRoom = await lockedManager.get(membership.roomCode);
-      if (!lockedRoom || !ownsSeat(lockedRoom, membership, identity)) return { connected: true, left: { message: 'This room expired or your seat is no longer available.' } };
+      if (!lockedRoom || !ownsSeat(lockedRoom, membership, identity)) return { connected: true, left: membershipLoss(lockedRoom, membership) };
       if (presence) {
         const now = Date.now();
         await lockedManager.heartbeat(membership.roomCode, membership.playerId, now, PRESENCE_STALE_MS);
@@ -71,7 +71,7 @@ async function synchronize(identity: ServerIdentity, membership?: Membership, pr
       const current = await lockedManager.get(membership.roomCode);
       return current && ownsSeat(current, membership, identity)
         ? { connected: true, membership, state: lockedManager.view(current, membership.playerId) }
-        : { connected: true, left: { message: 'This room expired or your seat is no longer available.' } };
+        : { connected: true, left: membershipLoss(current, membership) };
     });
   }
   return { connected: true, membership, state: manager.view(room, membership.playerId) };
@@ -163,6 +163,15 @@ function actionCode(action: RoomAction | GameAction, membership?: Membership): s
 function ownsSeat(room: RoomRuntime, membership: Membership, identity: ServerIdentity): boolean {
   const player = [...room.players, ...room.waiting].find((candidate) => candidate.id === membership.playerId);
   return Boolean(player && player.userId === identity.userId);
+}
+
+function membershipLoss(room: RoomRuntime | undefined, membership: Membership): { message: string } {
+  const seatStillExists = room && [...room.players, ...room.waiting].some((candidate) => candidate.id === membership.playerId);
+  return {
+    message: room && !seatStillExists
+      ? 'The host removed your seat from this table.'
+      : 'This room expired or your seat is no longer available.',
+  };
 }
 
 function nextDeadline(room: RoomRuntime): number {
