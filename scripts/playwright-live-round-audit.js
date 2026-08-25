@@ -25,6 +25,12 @@ async (page) => {
       await playerPage.getByRole('button', { name: 'Hold to peek' }).click();
       await playerPage.locator('.game-page').waitFor();
     }));
+    for (const playerPage of pages) {
+      const hiddenIds = await playerPage.locator('.playing-card.face-down[data-card-id]').evaluateAll((cards) => cards.map((card) => card.getAttribute('data-card-id')));
+      if (!hiddenIds.length || hiddenIds.some((id) => /^(?:A|[2-9]|10|J|Q|K)-(?:clubs|diamonds|hearts|spades)$/.test(id ?? ''))) {
+        throw new Error('A live browser received a semantic card ID for a concealed card.');
+      }
+    }
 
     await waiting.goto(page.url());
     await waiting.getByRole('textbox', { name: 'Your display name' }).fill('Maya');
@@ -100,7 +106,7 @@ async (page) => {
     await page.getByText('1/8 seated').waitFor();
     if (guest.url() !== 'http://localhost:5173/') throw new Error(`Leaving the table kept the stale room URL: ${guest.url()}`);
 
-    return { players: 2, waitingPromotion: true, hostRemoval: true, cambioCalled: true, finalTurns, resultsRevealed: true, rematchLobby: true, leaveFlow: true };
+    return { players: 2, opaqueHiddenIds: true, waitingPromotion: true, hostRemoval: true, cambioCalled: true, finalTurns, resultsRevealed: true, rematchLobby: true, leaveFlow: true };
   } finally {
     await waitingContext.close();
     await guestContext.close();

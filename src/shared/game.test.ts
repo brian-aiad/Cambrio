@@ -58,6 +58,23 @@ describe('deck and scoring', () => {
 });
 
 describe('hidden information', () => {
+  it('uses opaque, game-specific IDs that never disclose a hidden card face', () => {
+    const first = createGame('opaque-1', people.slice(0, 2), 1_000, fixedRandom);
+    const second = createGame('opaque-2', people.slice(0, 2), 1_000, fixedRandom);
+    const firstIds = Object.keys(first.cards);
+    const secondIds = Object.keys(second.cards);
+    const faceIds = new Set(createDeck().map((card) => card.id));
+    expect(firstIds).toHaveLength(52);
+    expect(new Set(firstIds)).toHaveLength(52);
+    expect(firstIds.every((id) => id.length === 14 && !faceIds.has(id))).toBe(true);
+    expect(firstIds.some((id) => secondIds.includes(id))).toBe(false);
+
+    for (const player of first.players) {
+      const view = projectGame(first, player.id);
+      expect(view.players.flatMap((candidate) => candidate.cards).every((card) => card.rank === undefined && card.suit === undefined)).toBe(true);
+    }
+  });
+
   it('reveals only the viewer initial bottom cards while held', () => {
     let game = createGame('game-1', people.slice(0, 2), 1_000, fixedRandom);
     const viewer = game.players[0];
@@ -67,6 +84,25 @@ describe('hidden information', () => {
     expect(ownCards.map((card) => card.slot)).toEqual([0, 1, 2, 3]);
     expect(ownCards.filter((card) => card.rank).map((card) => card.slot)).toEqual([2, 3]);
     expect(view.players.find((player) => player.id !== viewer.id)!.cards.some((card) => card.rank)).toBe(false);
+  });
+
+  it('sends a drawn face only to the active player while every hand stays hidden', () => {
+    let game = readyGame(4);
+    const activeId = game.turn!.playerId;
+    game = applyGameCommand(game, { type: 'DRAW', playerId: activeId }, 2_000, fixedRandom).state;
+
+    for (const viewer of game.players) {
+      const view = projectGame(game, viewer.id);
+      expect(view.players.flatMap((player) => player.cards).every((card) => card.rank === undefined && card.suit === undefined)).toBe(true);
+      if (viewer.id === activeId) {
+        expect(view.drawnCard?.rank).toBeDefined();
+        expect(view.drawnCard?.suit).toBeDefined();
+      } else {
+        expect(view.drawnCard).toBeUndefined();
+        expect(view.power).toBeUndefined();
+        expect(view.transfer).toBeUndefined();
+      }
+    }
   });
 });
 

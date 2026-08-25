@@ -51,6 +51,7 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 ## Accessibility and input safety
 
 - Primary controls meet the 44px iPhone convention; game cards remain large direct targets in normal portrait play. The narrowest landscape compaction still preserves readable labels and full card height.
+- The mobile table respects iPhone notch and home-indicator safe areas and suppresses page overscroll, keeping rapid stack taps inside the game surface.
 - Every hidden card has an accessible spatial name (for example, “bottom left card”), and interactive states add “tap to select.”
 - Focus uses the same mint target language as touch highlighting. Color is always paired with copy, shape, or motion.
 - Duplicate client decisions are locked while awaiting acknowledgement. The server additionally coalesces identical in-flight action IDs, rate-limits guess spam, and remains authoritative for every result.

@@ -39,9 +39,10 @@ try {
     gamePhase: dealt.game?.phase,
     discard: dealt.game?.discard ?? null,
     leakedRanks: dealt.game?.players.flatMap((player) => player.cards).some((card) => card.rank) ?? false,
+    leakedFaceIds: dealt.game?.players.flatMap((player) => player.cards).some((card) => /^(?:A|[2-9]|10|J|Q|K)-(?:clubs|diamonds|hearts|spades)$/.test(card.id)) ?? false,
   };
   console.log(JSON.stringify(summary));
-  if (!summary.create || !summary.join || !summary.start || summary.players !== 2 || summary.gamePhase !== 'initial_peek' || summary.discard !== null || summary.leakedRanks) {
+  if (!summary.create || !summary.join || !summary.start || summary.players !== 2 || summary.gamePhase !== 'initial_peek' || summary.discard !== null || summary.leakedRanks || summary.leakedFaceIds) {
     process.exitCode = 1;
   }
 } finally {

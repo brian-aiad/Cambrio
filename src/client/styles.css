@@ -156,7 +156,10 @@ input { width: 100%; min-height: 48px; border: 1px solid #cbd1e1; border-radius:
   gap: 7px;
   padding: 10px clamp(10px, 2.5vw, 34px) 12px;
   overflow: hidden;
+  overscroll-behavior: none;
   isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
   color: var(--cream);
   background-color: var(--table);
   background-image:
@@ -314,13 +317,13 @@ input { width: 100%; min-height: 48px; border: 1px solid #cbd1e1; border-radius:
 @keyframes cardLoad { to { translate: 0 -9px; } }
 
 @media (max-width: 760px) {
-  .topbar { height: 58px; padding-inline: 13px; }.brand > span:last-child { display: none; }.connection { font-size: 0; }.connection i { width: 9px; height: 9px; }.icon-button { display: none; }.profile-chip { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }.profile-chip span { overflow: hidden; text-overflow: ellipsis; }
+  .topbar { height: 58px; padding-left: max(13px, env(safe-area-inset-left)); padding-right: max(13px, env(safe-area-inset-right)); }.brand > span:last-child { display: none; }.connection { font-size: 0; }.connection i { width: 9px; height: 9px; }.icon-button { display: none; }.profile-chip { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }.profile-chip span { overflow: hidden; text-overflow: ellipsis; }
   .game-topbar { height: 46px !important; }.game-topbar .profile-chip { width: 38px; min-width: 38px; padding: 0; justify-content: center; line-height: 0; }.game-topbar .profile-chip svg { display: block; margin: 0; }.game-topbar .profile-chip span { display: none; }
   .landing { min-height: calc(100dvh - 58px); grid-template-columns: 1fr; padding: 40px 0; gap: 30px; }.hero-copy h1 { font-size: clamp(42px, 13vw, 62px); }.lede { font-size: 16px; }.join-panel { padding: 23px; }
   .page { width: min(100% - 22px, 1080px); padding: 30px 0; }.lobby-heading { align-items: start; flex-direction: column; }.lobby-grid { grid-template-columns: 1fr; }.lobby-rules { order: -1; }
   .lobby.page { width: min(100% - 18px, 1080px); padding: 18px 0 24px; }.lobby-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 9px 12px; margin-bottom: 15px; }.lobby-heading > div { min-width: 0; }.lobby-heading h1 { margin: 5px 0 7px; font-size: clamp(28px, 8.8vw, 39px); white-space: nowrap; }.lobby-heading h1 span { font-size: .77em; }.lobby-heading p:last-child { margin: 0; font-size: 12px; }.lobby-heading .share-button { width: 44px; min-width: 44px; padding: 0; font-size: 0; }.lobby-heading .share-button svg { width: 18px; height: 18px; }.lobby-grid { gap: 10px; }.lobby-rules { min-height: 102px; gap: 9px; order: -1; padding: 12px 15px; }.briefing-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }.lobby-rules h2 { margin: 0; font-size: 18px; white-space: nowrap; }.briefing-flow { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }.briefing-flow span { min-height: 40px; grid-template-columns: 18px minmax(0, 1fr); gap: 5px; padding: 6px; }.briefing-flow b { width: 18px; height: 18px; font-size: 8px; }.briefing-flow small { font-size: 8px; line-height: 1.15; }.player-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding: 13px; }.player-list .section-heading { grid-column: 1 / -1; min-height: 35px; }.section-heading > div:first-child { gap: 7px; }.section-heading h2 { margin: 0; font-size: 19px; }.section-heading span { font-size: 9px; }.seat-meter { grid-template-columns: repeat(8, 6px); gap: 2px; margin: 0; }.seat-meter i { width: 6px; height: 6px; }.lobby-player { min-width: 0; min-height: 63px; display: grid; grid-template-columns: 31px minmax(0, 1fr) 28px; grid-template-rows: 1fr auto; gap: 1px 7px; padding: 7px; border: 1px solid #e0e4ef; border-radius: 10px; background: #fff; }.lobby-player.self { border-color: #c7c4ed; background: #f7f7fe; }.lobby-player .avatar { width: 31px; height: 31px; grid-row: 1 / 3; border-radius: 8px; font-size: 10px; }.lobby-player .player-info { align-self: end; overflow: hidden; }.lobby-player .player-info strong { display: block; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.lobby-player .player-info span { display: none; }.lobby-player .host-badge, .lobby-player .ready-dot { grid-column: 2; align-self: start; font-size: 6px; letter-spacing: .07em; }.lobby-player .remove-player { width: 28px; min-width: 28px; min-height: 28px; grid-column: 3; grid-row: 1 / 3; align-self: center; padding: 0; }.lobby-footer { position: sticky; bottom: 0; z-index: 5; margin-top: 12px; padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); background: linear-gradient(transparent, var(--page) 28%); }.lobby-footer .deal, .lobby-footer > button { min-width: min(250px, 76vw); }
 
-  .game-page { height: calc(100dvh - 46px); min-height: 560px; grid-template-rows: 47px minmax(110px, auto) minmax(180px, 1fr) auto; gap: 4px; padding: 4px 5px 7px; }
+  .game-page { height: calc(100dvh - 46px); min-height: 560px; grid-template-rows: 47px minmax(110px, auto) minmax(180px, 1fr) auto; gap: 4px; padding: 4px max(5px, env(safe-area-inset-right)) max(7px, env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left)); }
   .game-page::before { inset: 53px -30% 71px; border-radius: 50% / 16%; }
   .game-status { min-height: 43px; grid-template-columns: 30px 1fr 42px; padding-inline: 4px; }.room-pill { width: 30px; height: 30px; overflow: hidden; justify-content: center; padding: 0; color: transparent; font-size: 0; }.room-pill::after { content: attr(data-short); color: #fff; font-size: 7px; letter-spacing: .02em; }.countdown { width: 38px; height: 38px; }.turn-banner strong { font-size: 18px; }.turn-banner span { font-size: 8px; }
   .opponent-rail { display: grid; grid-template-columns: repeat(var(--opponent-count), minmax(0, 1fr)); justify-content: stretch; align-content: start; gap: 5px 3px; overflow: visible; padding: 1px 4px 5px; }
@@ -330,7 +333,7 @@ input { width: 100%; min-height: 48px; border: 1px solid #cbd1e1; border-radius:
   .table-center { min-height: 180px; }.pile-zone { gap: 23px; }.pile .playing-card, .deck-card { width: 65px; }.pile > span { font-size: 7px; }.deck-card small { right: -5px; top: -6px; }
   .drawn-flight-anchor { width: 54px; left: calc(50% - 84px); right: auto; top: auto; bottom: 31px; translate: 0; }.drawn-panel { left: 50%; right: auto; top: auto; bottom: 24px; translate: -50% 0; gap: 7px; padding: 7px; border-radius: 9px; }.drawn-panel > span { display: none; }.drawn-panel .playing-card { width: 54px; }.drawn-actions { width: 106px; }.drawn-actions small { font-size: 8px; }.discard-drawn { min-height: 43px; padding: 6px; font-size: 10px; }
   .stack-hint { bottom: 1px; padding: 5px 8px; }.stack-hint span { font-size: 8px; }
-  .you-label { margin-top: 4px; }.game-actions { right: 6px; bottom: 7px; }.cambio-button { min-height: 43px; max-width: 90px; padding: 7px 9px; font-size: 8px; }
+  .you-label { margin-top: 4px; }.game-actions { right: max(6px, env(safe-area-inset-right)); bottom: max(7px, env(safe-area-inset-bottom)); }.cambio-button { min-height: 43px; max-width: 90px; padding: 7px 9px; font-size: 8px; }
   .game-page:has(.self-zone .hand-slot:nth-child(5)) .self-zone { translate: -34px 0; }
   .interaction-prompt { bottom: 230px; max-width: calc(100% - 16px); min-height: 43px; gap: 6px; padding: 5px 7px; }.interaction-prompt strong { font-size: 9px; }.ability-chip { display: none; }.text-button { padding: 4px; white-space: nowrap; }.action-sequence { min-width: 0; }.sequence-step { grid-template-columns: 18px auto; gap: 3px; }.sequence-step b { width: 18px; height: 18px; }.sequence-step small { font-size: 7px; }.reveal-status { min-width: 150px; }.power-choice button { padding: 5px 9px; font-size: 9px; }
   .stack-result { top: 58%; font-size: 8px; }
@@ -352,7 +355,7 @@ input { width: 100%; min-height: 48px; border: 1px solid #cbd1e1; border-radius:
 /* Wide phones in landscape still need all seven opponents in fixed memory positions. */
 @media (max-height: 500px) and (min-width: 761px) {
   .game-page .pause-banner { display: none; }
-  .game-page { height: calc(100dvh - 52px); min-height: 0; grid-template-rows: 43px auto minmax(0, 1fr); gap: 4px; padding: 4px 8px 7px; overflow: hidden; }
+  .game-page { height: calc(100dvh - 52px); min-height: 0; grid-template-rows: 43px auto minmax(0, 1fr); gap: 4px; padding: 4px max(8px, env(safe-area-inset-right)) max(7px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); overflow: hidden; }
   .opponent-rail { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); justify-content: stretch; gap: 4px; overflow: visible; padding: 1px 4px 5px; }
   .player-hand { --card-w: 46px; --card-gap: 3px; }.player-hand.compact { --card-w: 42px; --card-gap: 2px; width: 100%; min-width: 0; }
   .game-page:has(.opponent-rail .hand-slot:nth-child(5)) .player-hand.compact { --card-w: 32px; }
@@ -365,6 +368,7 @@ input { width: 100%; min-height: 48px; border: 1px solid #cbd1e1; border-radius:
   .seat-name { width: 100%; justify-content: center; font-size: 9px; }
   .table-center { min-height: 0; }.table-center .pile-zone { translate: 0 -4px; }.pile .playing-card, .deck-card { width: 57px; }
   .game-page:has(.drawn-panel) .drawn-panel { right: 142px; gap: 6px; padding: 7px; }
+  .game-page:has(.drawn-panel) .drawn-panel > span { display: none; }
   .game-page:has(.drawn-panel) .drawn-panel .playing-card { width: 52px; }
   .game-page:has(.drawn-panel) .drawn-actions { width: 104px; }
   .self-zone { position: absolute; left: 18px; bottom: 7px; width: 220px; align-self: auto; }

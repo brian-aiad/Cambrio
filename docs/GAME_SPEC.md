@@ -51,7 +51,7 @@ Every power enters target selection immediately after the power card is discarde
 
 ## Multiplayer guarantees
 
-- The server owns the deck, hidden card identities, timers, validation, race order, ending queue, and scores. Clients receive only personalized projections.
+- The server owns the deck, hidden card identities, timers, validation, race order, ending queue, and scores. Clients receive only personalized projections. Live card IDs are random opaque tokens and never contain rank or suit text, so inspecting network or React state cannot decode a concealed face.
 - Turn actions time out after 45 seconds to a safe draw-discard or declined optional power. Mandatory card gifts time out to a random legal card.
 - Any disconnected seated player pauses the entire active round. The server snapshots the exact remaining initial-peek, turn, power, or transfer time; no cards, races, powers, or timeouts can advance while paused. The seat is preserved, and the saved clock resumes only after every non-forfeited player has returned. The host may remove a player as a forfeit instead of waiting.
 - Socket rooms detect a dropped transport directly. The free hosted transport uses periodic presence heartbeats and marks a seat disconnected after 18 seconds without one. A hidden or reopened browser with the same identity reclaims the same seat rather than creating a duplicate.

@@ -26,8 +26,8 @@ async (page) => {
   if (await page.locator('.stack-hint').evaluateAll((elements) => elements.some((element) => Number(window.getComputedStyle(element).opacity) > 0.1))) throw new Error('Stack window stayed visibly open after a successful stack.');
   if (!(await page.locator('.action-sequence').textContent())?.includes('Give a card')) throw new Error('Opponent stack did not enter the mandatory transfer flow.');
   if (await page.locator('.self-zone .target-cue.give').count() !== 4) throw new Error('Mandatory transfer did not mark every legal gift card directly.');
-  await page.waitForTimeout(650);
   if ((await page.locator('.flight-front strong').textContent()) !== '8') throw new Error('Successful stack flight did not reveal the matching rank on its way to discard.');
+  await page.waitForTimeout(520);
   await page.screenshot({ path: `${root}/stack-correct-arrival-390x844.png` });
 
   return { wrongStack: 'penalty in +1', correctStack: 'closed with transfer' };

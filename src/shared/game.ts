@@ -1,3 +1,5 @@
+import { nanoid } from 'nanoid';
+
 export const SUITS = ['clubs', 'diamonds', 'hearts', 'spades'] as const;
 export const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'] as const;
 export const MAX_HAND_CARDS = 6;
@@ -201,7 +203,11 @@ export function createGame(
   if (participants.length < 2 || participants.length > 8) {
     throw new GameRuleError('PLAYER_COUNT', 'Cambrio requires 2–8 players.');
   }
-  const cards = createDeck();
+  // Public game views must carry stable identifiers so swaps and animations can
+  // track physical cards, but an identifier may never encode its face. Keep the
+  // readable IDs returned by createDeck() for rules tooling, then replace them
+  // with cryptographically random IDs before any live state is dealt.
+  const cards = createDeck().map((card) => ({ ...card, id: nanoid(14) }));
   const cardMap = Object.fromEntries(cards.map((card) => [card.id, card]));
   const deck = shuffle(cards.map((card) => card.id), random);
   const ordered = shuffle(participants, random);

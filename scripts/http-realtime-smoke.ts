@@ -82,6 +82,8 @@ try {
     const game = client.state!.game!;
     const leaked = game.players.some((player) => player.cards.some((card) => card.rank || card.suit));
     if (leaked) throw new Error('A serverless projection leaked a concealed hand rank.');
+    const semanticId = game.players.some((player) => player.cards.some((card) => /^(?:A|[2-9]|10|J|Q|K)-(?:clubs|diamonds|hearts|spades)$/.test(card.id)));
+    if (semanticId) throw new Error('A serverless projection encoded a concealed face in its card ID.');
   }
 
   let snapshot = await roomSnapshot(code);
@@ -108,7 +110,7 @@ try {
     players: 8,
     concurrentJoins: 'serialized',
     rapidDeals: `${starts.length} requests / 1 round`,
-    privateProjections: 'no leaked ranks',
+    privateProjections: 'no leaked ranks, suits, or face IDs',
     stackRace: '8 requests / 1 winner',
     storage: 'Upstash free',
   }));
