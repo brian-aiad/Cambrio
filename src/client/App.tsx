@@ -86,6 +86,10 @@ export function App() {
 
   useEffect(() => {
     if (!session) return;
+    if (!session.token) {
+      setProfileReady(false);
+      return;
+    }
     const headers = new Headers(session.token ? { Authorization: `Bearer ${session.token}` } : { 'x-visitor-id': session.visitorId });
     void fetch('/api/me', { headers }).then((response) => response.json()).then((value) => setProfileReady(Boolean(value.handle))).catch(() => setProfileReady(false));
   }, [session]);
