@@ -12,7 +12,8 @@ export function VisualAuditApp() {
   const query = new URLSearchParams(window.location.search);
   const scene = query.get('scene') ?? 'awaiting';
   const playerCount = Math.min(8, Math.max(2, Number(query.get('players') ?? 4)));
-  const [room, setRoom] = useState(() => makeRoom(scene, playerCount));
+  const activeIndex = Math.min(playerCount - 1, Math.max(0, Number(query.get('active') ?? (scene === 'opponent-turn' || scene === 'paused' || scene === 'initial-paused' ? 1 : 0))));
+  const [room, setRoom] = useState(() => makeRoom(scene, playerCount, activeIndex));
   if (scene === 'cards') return <CardGallery />;
   const send = async (action: { type: string; targetCardId?: string; swap?: boolean }): Promise<ActionAck> => {
     let outcome: ActionAck['outcome'];
@@ -37,13 +38,14 @@ function CardGallery() {
   return <main className="card-gallery-page"><p className="eyebrow">Visual audit</p><h1>Every card face</h1><section className="card-gallery">{SUITS.flatMap((suit) => RANKS.map((rank, index) => <div key={`${rank}-${suit}`}><Card card={{ id: `gallery-${rank}-${suit}`, slot: index, rank, suit }} /><span>{rank} · {suit}</span></div>))}</section></main>;
 }
 
-function makeRoom(scene: string, playerCount: number): RoomView {
+function makeRoom(scene: string, playerCount: number, activeIndex: number): RoomView {
+  const isResults = scene === 'results' || scene === 'results-tie';
   const players = Array.from({ length: playerCount }, (_, index) => makePlayer(index, scene === 'all-six' ? 6 : (scene === 'six' || scene === 'six-wrong') && index === 0 ? 6 : scene === 'zero' && index === 0 ? 0 : 4));
   const self = players[0];
-  const activePlayerId = scene === 'opponent-turn' || scene === 'paused' || scene === 'initial-paused' ? players[1].id : self.id;
+  const activePlayerId = players[activeIndex].id;
   const game: GameView = {
     id: `audit-${scene}`,
-    phase: scene === 'results' ? 'results' : scene.startsWith('initial') ? 'initial_peek' : scene === 'ending' ? 'ending' : 'playing',
+    phase: isResults ? 'results' : scene.startsWith('initial') ? 'initial_peek' : scene === 'ending' ? 'ending' : 'playing',
     version: 12,
     viewerId: self.id,
     players,
@@ -79,11 +81,11 @@ function makeRoom(scene: string, playerCount: number): RoomView {
     players[1].connected = false;
     game.paused = { playerIds: [players[1].id], remainingMs: 17_000 };
   }
-  if (scene === 'results') {
+  if (isResults) {
     players[0].cards.push({ id: 'p0-card-4', slot: 4 }, { id: 'p0-card-5', slot: 5 });
     players[1].cards.push({ id: 'p1-card-4', slot: 4 });
     game.players = players.map((player, playerIndex) => ({ ...player, cards: player.cards.map((card, cardIndex) => faceCard(card.id, card.slot, ranks[(playerIndex + cardIndex) % ranks.length], suits[(playerIndex + cardIndex) % suits.length])) }));
-    game.results = game.players.map((player, index) => ({ playerId: player.id, score: 12 + index * 7, winner: index === 0, forfeited: false }));
+    game.results = game.players.map((player, index) => ({ playerId: player.id, score: scene === 'results-tie' && index < 2 ? 12 : 12 + index * 7, winner: scene === 'results-tie' ? index < 2 : index === 0, forfeited: false }));
     game.activePlayerId = undefined;
     game.turnStage = undefined;
     game.deadlineAt = undefined;
@@ -91,7 +93,7 @@ function makeRoom(scene: string, playerCount: number): RoomView {
 
   return {
     code: 'PLAY2458',
-    phase: scene === 'results' ? 'results' : 'game',
+    phase: isResults ? 'results' : 'game',
     selfPlayerId: self.id,
     hostPlayerId: self.id,
     players: players.map((player, index) => ({ id: player.id, name: player.name, ready: true, connected: true, isHost: index === 0, joinedAt: index })),

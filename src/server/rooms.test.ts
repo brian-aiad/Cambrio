@@ -6,6 +6,7 @@ import { RoomManager, type Membership } from './rooms.js';
 
 const host: ServerIdentity = { userId: 'host-user', anonymous: true };
 const guest: ServerIdentity = { userId: 'guest-user', anonymous: true };
+const third: ServerIdentity = { userId: 'third-user', anonymous: true };
 let actionNumber = 0;
 
 const roomAction = <T extends Omit<RoomAction, 'clientActionId'>>(action: T) => ({ ...action, clientActionId: `room-${++actionNumber}` }) as RoomAction;
@@ -23,6 +24,22 @@ async function startedRoom() {
   return { persistence, manager, hostMembership, guestMembership };
 }
 
+async function startedThreePlayerRoom() {
+  const persistence = new MemoryPersistence();
+  const manager = new RoomManager(persistence);
+  const created = await manager.handleRoomAction(host, undefined, roomAction({ type: 'ROOM_CREATE', name: 'Host' }));
+  const hostMembership = created.membership!;
+  const second = await manager.handleRoomAction(guest, undefined, roomAction({ type: 'ROOM_JOIN', code: hostMembership.roomCode, name: 'Guest' }));
+  const guestMembership = second.membership!;
+  const joined = await manager.handleRoomAction(third, undefined, roomAction({ type: 'ROOM_JOIN', code: hostMembership.roomCode, name: 'Third' }));
+  const thirdMembership = joined.membership!;
+  await manager.handleRoomAction(guest, guestMembership, roomAction({ type: 'ROOM_READY', ready: true }));
+  await manager.handleRoomAction(third, thirdMembership, roomAction({ type: 'ROOM_READY', ready: true }));
+  await manager.handleRoomAction(host, hostMembership, roomAction({ type: 'ROOM_START' }));
+  for (const membership of [hostMembership, guestMembership, thirdMembership]) await completePeek(manager, membership);
+  return { manager, hostMembership, guestMembership, thirdMembership };
+}
+
 async function completePeek(manager: RoomManager, membership: Membership) {
   const room = (await manager.get(membership.roomCode))!;
   const version = room.game!.version;
@@ -31,12 +48,26 @@ async function completePeek(manager: RoomManager, membership: Membership) {
 }
 
 describe('RoomManager integration', () => {
+  it('keeps a one-player room in the lobby until a second player joins', async () => {
+    const manager = new RoomManager(new MemoryPersistence());
+    const created = await manager.handleRoomAction(host, undefined, roomAction({ type: 'ROOM_CREATE', name: 'Solo Host' }));
+
+    await expect(manager.handleRoomAction(host, created.membership, roomAction({ type: 'ROOM_START' }))).rejects.toMatchObject({ code: 'PLAYER_COUNT' });
+
+    const room = (await manager.get(created.membership!.roomCode))!;
+    expect(room.phase).toBe('lobby');
+    expect(room.players).toHaveLength(1);
+    expect(room.game).toBeUndefined();
+  });
+
   it('creates, joins, readies, deals, and restores a checkpoint', async () => {
     const { persistence, manager, hostMembership, guestMembership } = await startedRoom();
     const room = (await manager.get(hostMembership.roomCode))!;
     expect(room.phase).toBe('game');
     expect(room.game?.discard).toEqual([]);
-    expect(manager.view(room, hostMembership.playerId).game?.players.flatMap((player) => player.cards).some((card) => card.rank)).toBe(false);
+    const hostView = manager.view(room, hostMembership.playerId);
+    expect(hostView.game?.players.flatMap((player) => player.cards).some((card) => card.rank)).toBe(false);
+    expect(hostView.game?.deadlineAt).toBe(room.initialPeekDeadlineAt);
 
     const restoredManager = new RoomManager(persistence);
     const restored = await restoredManager.get(hostMembership.roomCode);
@@ -215,6 +246,63 @@ describe('RoomManager integration', () => {
       const resumed = (await manager.get(room.code))!;
       expect(resumed.pause).toBeUndefined();
       expect(resumed.initialPeekDeadlineAt).toBe(15_180_000 + remaining);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('preserves an unchanged turn clock when one of several disconnected seats forfeits', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(16_000_000);
+    try {
+      const { manager, hostMembership, guestMembership, thirdMembership } = await startedThreePlayerRoom();
+      let room = (await manager.get(hostMembership.roomCode))!;
+      room.game!.turn!.playerId = hostMembership.playerId;
+      room.game!.turn!.deadlineAt = 16_045_000;
+
+      clock.mockReturnValue(16_005_000);
+      await manager.disconnect(room.code, guestMembership.playerId);
+      await manager.disconnect(room.code, thirdMembership.playerId);
+      room = (await manager.get(room.code))!;
+      expect(room.pause?.turnRemainingMs).toBe(40_000);
+
+      clock.mockReturnValue(16_125_000);
+      await manager.handleRoomAction(host, hostMembership, roomAction({ type: 'ROOM_REMOVE', playerId: guestMembership.playerId }));
+      room = (await manager.get(room.code))!;
+      expect(room.pause?.turnRemainingMs).toBe(40_000);
+      expect(manager.view(room, hostMembership.playerId).game?.paused?.playerIds).toEqual([thirdMembership.playerId]);
+
+      clock.mockReturnValue(16_185_000);
+      await manager.handleRoomAction(third, undefined, roomAction({ type: 'ROOM_JOIN', code: room.code, name: 'Third Back' }));
+      room = (await manager.get(room.code))!;
+      expect(room.pause).toBeUndefined();
+      expect(room.game!.turn!.deadlineAt).toBe(16_225_000);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('gives a newly advanced turn its full clock while another seat remains disconnected', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(17_000_000);
+    try {
+      const { manager, hostMembership, guestMembership, thirdMembership } = await startedThreePlayerRoom();
+      let room = (await manager.get(hostMembership.roomCode))!;
+      room.game!.turn!.playerId = guestMembership.playerId;
+      room.game!.turn!.deadlineAt = 17_045_000;
+
+      clock.mockReturnValue(17_005_000);
+      await manager.disconnect(room.code, guestMembership.playerId);
+      await manager.disconnect(room.code, thirdMembership.playerId);
+      clock.mockReturnValue(17_125_000);
+      await manager.handleRoomAction(host, hostMembership, roomAction({ type: 'ROOM_REMOVE', playerId: guestMembership.playerId }));
+      room = (await manager.get(room.code))!;
+      expect(room.pause?.turnRemainingMs).toBe(45_000);
+      expect(room.game!.turn!.playerId).not.toBe(guestMembership.playerId);
+
+      clock.mockReturnValue(17_185_000);
+      await manager.handleRoomAction(third, undefined, roomAction({ type: 'ROOM_JOIN', code: room.code, name: 'Third Back' }));
+      room = (await manager.get(room.code))!;
+      expect(room.pause).toBeUndefined();
+      expect(room.game!.turn!.deadlineAt).toBe(17_230_000);
     } finally {
       clock.mockRestore();
     }

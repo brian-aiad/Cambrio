@@ -115,6 +115,13 @@ try {
     if (!drawn.ack?.ok) throw new Error(`Unable to draw while finding a stack race: ${drawn.ack?.message}`);
     const discarded = await gameAction(active, { type: 'DISCARD_DRAWN' });
     if (!discarded.ack?.ok) throw new Error(`Unable to discard while finding a stack race: ${discarded.ack?.message}`);
+    // A randomly drawn 7–Q legitimately opens its power before the next turn.
+    // Settle that authoritative stage instead of assuming every discard advances
+    // directly to awaiting_draw; otherwise the smoke itself races the game rules.
+    if (active.state?.game?.power) {
+      const declined = await gameAction(active, { type: 'POWER_DECLINE' });
+      if (!declined.ack?.ok) throw new Error(`Unable to decline a power while finding a stack race: ${declined.ack?.message}`);
+    }
     snapshot = await roomSnapshot(code);
     matchingCard = findMatchingCard(snapshot.game!);
   }

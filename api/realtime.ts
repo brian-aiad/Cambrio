@@ -13,7 +13,7 @@ import {
 } from '../src/shared/protocol.js';
 import { createPersistence } from '../src/server/persistence.js';
 import { RoomManager, type Membership, type RoomRuntime } from '../src/server/rooms.js';
-import type { ServerIdentity } from '../src/server/auth.js';
+import { AuthService, type ServerIdentity } from '../src/server/auth.js';
 
 type RealtimeRequest =
   | { operation: 'sync'; membership?: Membership; presence?: boolean }
@@ -53,7 +53,7 @@ export default {
     }
 
     try {
-      const identity = identityFromRequest(request);
+      const identity = await identityFromRequest(request);
       const response = body.operation === 'sync'
         ? await synchronize(identity, body.membership, body.presence)
         : await performAction(identity, body);
@@ -161,10 +161,19 @@ async function enforceActionRate(userId: string): Promise<void> {
   if (count > 60) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
 }
 
-function identityFromRequest(request: Request): ServerIdentity {
+async function identityFromRequest(request: Request): Promise<ServerIdentity> {
+  const token = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (token) {
+    const persistence = createPersistence();
+    return new AuthService(persistence).authenticate(token, request.headers.get('x-visitor-id') ?? undefined);
+  }
   const visitorId = request.headers.get('x-visitor-id')?.match(/^[a-zA-Z0-9_-]{10,64}$/)?.[0];
   if (!visitorId) throw new Error('AUTH_REQUIRED');
-  return { userId: `web_${visitorId}`, anonymous: true };
+  // Preserve the legacy visitor namespace for unsigned hosted sessions so an
+  // in-progress guest room survives a deployment that adds token support.
+  const userId = `web_${visitorId}`;
+  const profile = await createPersistence().getProfileByUser(userId);
+  return profile ?? { userId, anonymous: true };
 }
 
 function actionCode(action: RoomAction | GameAction, membership?: Membership): string | undefined {

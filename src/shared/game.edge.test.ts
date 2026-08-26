@@ -332,6 +332,54 @@ describe('timeout fallbacks', () => {
 });
 
 describe('ending edge cases', () => {
+  it('finishes the exact caller-centered turn sequence for every active seat, caller, and room size', () => {
+    for (let playerCount = 2; playerCount <= 8; playerCount += 1) {
+      for (let activeSeat = 0; activeSeat < playerCount; activeSeat += 1) {
+        for (let callerSeat = 0; callerSeat < playerCount; callerSeat += 1) {
+          const endingParticipants = Array.from({ length: playerCount }, (_, playerIndex) => ({ id: `ending-p${playerIndex}`, userId: `ending-u${playerIndex}`, name: `Ending Player ${playerIndex}` }));
+          let state = createGame(`ending-matrix-${playerCount}-${activeSeat}-${callerSeat}`, endingParticipants, 1_000, random);
+          for (const endingPlayer of [...state.players]) {
+            state = applyGameCommand(state, { type: 'INITIAL_PEEK_END', playerId: endingPlayer.id }, 1_001, random).state;
+          }
+          const order = [...state.turnOrder];
+          const currentId = order[activeSeat];
+          const callerId = order[callerSeat];
+          state.turn!.playerId = currentId;
+          state.turn!.stage = 'awaiting_draw';
+          state.turn!.drawnCardId = undefined;
+
+          const beforeCaller: string[] = [];
+          if (currentId !== callerId) {
+            let index = (activeSeat + 1) % order.length;
+            while (true) {
+              beforeCaller.push(order[index]);
+              if (order[index] === callerId) break;
+              index = (index + 1) % order.length;
+            }
+          }
+          const finalRotation: string[] = [];
+          let index = (callerSeat + 1) % order.length;
+          while (true) {
+            finalRotation.push(order[index]);
+            if (order[index] === callerId) break;
+            index = (index + 1) % order.length;
+          }
+          const expectedTurns = [currentId, ...beforeCaller, ...finalRotation];
+
+          state = applyGameCommand(state, { type: 'CALL_CAMBIO', playerId: callerId }, 2_000, random).state;
+          const completedTurns: string[] = [];
+          while (state.phase !== 'results') {
+            completedTurns.push(state.turn!.playerId);
+            state = applyGameCommand(state, { type: 'TIMEOUT', playerId: state.turn!.playerId }, 3_000 + completedTurns.length, random).state;
+          }
+
+          expect(completedTurns, `${playerCount} players, active seat ${activeSeat}, caller seat ${callerSeat}`).toEqual(expectedTurns);
+          expect(state.results).toHaveLength(playerCount);
+        }
+      }
+    }
+  });
+
   it('ignores no later ending trigger by rejecting a second Cambio call', () => {
     let state = ready(4);
     const first = state.players[0].id;

@@ -8,6 +8,7 @@ import {
   type GameCommand,
   type GameEffect,
   type GameState,
+  type TurnStage,
 } from '../shared/game.js';
 import type { GameAction, RoomAction, RoomPlayerView, RoomView } from '../shared/protocol.js';
 import { normalizeDisplayName, toGameCommand } from '../shared/protocol.js';
@@ -144,11 +145,19 @@ export class RoomManager {
         const target = room.players.find((candidate) => candidate.id === action.playerId);
         if (!target) throw new GameRuleError('PLAYER_NOT_FOUND', 'That player is not seated.');
         if (room.game && room.game.phase !== 'results') {
-          const transition = applyGameCommand(room.game, { type: 'FORFEIT_PLAYER', playerId: target.id }, Date.now(), secureRandom);
+          const now = Date.now();
+          const timerState = {
+            phase: room.game.phase,
+            turnPlayerId: room.game.turn?.playerId,
+            turnStage: room.game.turn?.stage,
+            transferFromPlayerId: room.game.transfer?.fromPlayerId,
+            transferToPlayerId: room.game.transfer?.toPlayerId,
+          };
+          const transition = applyGameCommand(room.game, { type: 'FORFEIT_PLAYER', playerId: target.id }, now, secureRandom);
           room.game = transition.state;
           room.players = room.players.filter((candidate) => candidate.id !== target.id);
           delete room.disconnectGrace[target.id];
-          this.refreshPauseAfterTableChange(room, Date.now());
+          this.refreshPauseAfterTableChange(room, now, timerState);
           await this.afterTransition(room, transition.effects);
           result = { membership, effects: transition.effects };
         } else {
@@ -379,6 +388,7 @@ export class RoomManager {
       stats: candidate.stats,
     });
     const game = !isWaiting && room.game ? projectGame(room.game, playerId) : undefined;
+    if (game?.phase === 'initial_peek') game.deadlineAt = room.initialPeekDeadlineAt;
     if (game && room.pause) {
       game.paused = {
         playerIds: this.disconnectedGamePlayerIds(room),
@@ -556,10 +566,32 @@ export class RoomManager {
     room.pause = undefined;
   }
 
-  private refreshPauseAfterTableChange(room: RoomRuntime, now: number): void {
+  private refreshPauseAfterTableChange(room: RoomRuntime, now: number, previous: {
+    phase: GameState['phase'];
+    turnPlayerId?: string;
+    turnStage?: TurnStage;
+    transferFromPlayerId?: string;
+    transferToPlayerId?: string;
+  }): void {
     if (!room.pause) return;
-    room.pause = undefined;
-    this.pauseForDisconnectedPlayers(room, now);
+    if (!room.game || room.game.phase === 'results') {
+      room.pause = undefined;
+      return;
+    }
+
+    const turnChanged = previous.phase !== room.game.phase
+      || previous.turnPlayerId !== room.game.turn?.playerId
+      || previous.turnStage !== room.game.turn?.stage;
+    const transferChanged = previous.transferFromPlayerId !== room.game.transfer?.fromPlayerId
+      || previous.transferToPlayerId !== room.game.transfer?.toPlayerId;
+    if (turnChanged) room.pause.turnRemainingMs = room.game.turn ? Math.max(0, room.game.turn.deadlineAt - now) : undefined;
+    if (transferChanged) room.pause.transferRemainingMs = room.game.transfer ? Math.max(0, room.game.transfer.deadlineAt - now) : undefined;
+    if (previous.phase === 'initial_peek' && room.game.phase !== 'initial_peek') room.pause.initialPeekRemainingMs = undefined;
+
+    // Keep the original frozen values for any timer whose underlying action did
+    // not change. Rebuilding from absolute deadlines here would let wall-clock
+    // time leak into a pause while another disconnected seat is still absent.
+    if (this.disconnectedGamePlayerIds(room).length === 0) this.resumeIfEveryoneReturned(room, now);
   }
 
   private pausedRemainingMs(room: RoomRuntime): number {

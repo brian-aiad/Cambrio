@@ -8,13 +8,13 @@ async (page) => {
     await page.goto(`${base}?scene=${scene}&players=${players}`);
     await page.waitForTimeout(wait);
     const name = `${slug(scene)}-${players}p-${viewport.width}x${viewport.height}${suffix}.png`;
-    await page.screenshot({ path: `${root}/${name}`, fullPage: scene === 'results' || scene === 'cards' });
+    await page.screenshot({ path: `${root}/${name}`, fullPage: scene.startsWith('results') || scene === 'cards' });
   };
 
   const coreScenes = [
     'initial', 'initial-paused', 'awaiting', 'opponent-turn', 'paused', 'drawn', 'own-select', 'own-reveal', 'opponent-select',
     'opponent-reveal', 'blind-own', 'blind-opponent', 'black-own',
-    'black-opponent', 'black-reveal', 'transfer', 'ending', 'six', 'zero', 'results',
+    'black-opponent', 'black-reveal', 'transfer', 'ending', 'six', 'zero', 'results', 'results-tie',
   ];
   for (const scene of coreScenes) await capture(scene, scene === 'results' ? 2 : 4, { width: 390, height: 844 }, '', scene === 'ending' || scene === 'zero' ? 1_850 : scene.includes('reveal') ? 180 : 420);
   await capture('black-choice', 4, { width: 390, height: 844 }, '', 1_850);

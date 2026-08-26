@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { ArrowRight, Check, Copy, Link2, UserRound, Volume2, VolumeX, Waves, X } from 'lucide-react';
+import { ArrowRight, Check, CircleHelp, Copy, Link2, UserRound, Volume2, VolumeX, Waves, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { nanoid } from 'nanoid';
@@ -26,11 +26,12 @@ export function App() {
   const roomRef = useRef<RoomView | undefined>(undefined);
   const audio = useGameAudio();
   const audioRef = useRef(audio.playNotice);
+  const turnAudioRef = useRef(audio.playTurn);
   const pendingRoomActions = useRef(new Set<string>());
   const pendingGameActions = useRef(new Set<string>());
   const noticePhase = useRef('home');
   const currentNoticePhase = room ? `${room.phase}:${room.game?.phase ?? 'none'}` : 'home';
-  useEffect(() => { audioRef.current = audio.playNotice; }, [audio.playNotice]);
+  useEffect(() => { audioRef.current = audio.playNotice; turnAudioRef.current = audio.playTurn; }, [audio.playNotice, audio.playTurn]);
 
   useEffect(() => {
     let active = true;
@@ -50,6 +51,13 @@ export function App() {
       if (!next.active) setFatal(error.message);
     });
     next.on('room:state', (state: RoomView) => {
+      const previous = roomRef.current;
+      const previousOwnsTurn = Boolean(previous?.game && (previous.game.phase === 'playing' || previous.game.phase === 'ending') && previous.game.activePlayerId === previous.selfPlayerId);
+      const nowOwnsTurn = Boolean(state.game && (state.game.phase === 'playing' || state.game.phase === 'ending') && state.game.activePlayerId === state.selfPlayerId);
+      if (nowOwnsTurn && !previousOwnsTurn) {
+        turnAudioRef.current();
+        vibrate([12, 36, 12]);
+      }
       roomRef.current = state;
       setRoom(state);
       const expectedPath = `/room/${state.code}`;
@@ -187,6 +195,12 @@ function WaitingRoom({ room, player, onLeave }: { room: RoomView; player: RoomPl
 
 function TopBar({ connected, session, audio, compact, forceProfile, onProfileSaved, onLeave }: { connected: boolean; session: ClientSession; audio: ReturnType<typeof useGameAudio>; compact: boolean; forceProfile: boolean; onProfileSaved: () => void; onLeave?: () => void }) {
   const [open, setOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const helpButton = useRef<HTMLButtonElement>(null);
+  const closeRules = useCallback(() => {
+    setRulesOpen(false);
+    window.requestAnimationFrame(() => helpButton.current?.focus());
+  }, []);
   return (
     <header className={`topbar ${compact ? 'game-topbar' : ''}`}>
       <a className="brand" href="/" title="Cambrio home"><span className="brand-mark" aria-hidden="true"><CambrioGlyph decorative /></span><span className="brand-word">cambrio</span></a>
@@ -194,26 +208,56 @@ function TopBar({ connected, session, audio, compact, forceProfile, onProfileSav
         <span className={`connection ${connected ? 'online' : ''}`}><i />{connected ? 'Live' : 'Reconnecting'}</span>
         <button className="icon-button" onClick={audio.toggleEffects} aria-label="Toggle sound effects">{audio.settings.effects ? <Volume2 size={17} /> : <VolumeX size={17} />}</button>
         <button className={`icon-button ${audio.settings.ambience ? 'active' : ''}`} onClick={audio.toggleAmbience} aria-label="Toggle ambience"><Waves size={17} /></button>
-        <button className="profile-chip" onClick={() => setOpen(true)}><UserRound size={15} /><span>{session.anonymous ? 'Guest' : session.session?.user.email?.split('@')[0] ?? 'Profile'}</span></button>
+        <button ref={helpButton} className="icon-button help-button" onClick={() => { setOpen(false); setRulesOpen(true); }} aria-label="How to play Cambrio" aria-haspopup="dialog" aria-expanded={rulesOpen}><CircleHelp size={18} /></button>
+        <button className="profile-chip" onClick={() => { setRulesOpen(false); setOpen(true); }}><UserRound size={15} /><span>{session.anonymous ? 'Guest' : session.session?.user.email?.split('@')[0] ?? 'Profile'}</span></button>
       </div>
       <AnimatePresence>{(open || forceProfile) && <AccountPanel session={session} close={() => setOpen(false)} force={forceProfile} onSaved={onProfileSaved} onLeave={onLeave} />}</AnimatePresence>
+      <AnimatePresence>{rulesOpen && !forceProfile && <RulesPanel close={closeRules} />}</AnimatePresence>
     </header>
   );
+}
+
+function RulesPanel({ close }: { close: () => void }) {
+  const reduceMotion = useReducedMotion();
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('keydown', closeOnEscape);
+    closeButton.current?.focus();
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [close]);
+  return <motion.div className="modal-backdrop rules-backdrop" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onPointerDown={close}>
+    <motion.section className="rules-panel glass" role="dialog" aria-modal="true" aria-labelledby="rules-title" aria-describedby="rules-summary" initial={reduceMotion ? false : { opacity: 0, y: 18, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: .99 }} transition={{ duration: reduceMotion ? 0 : .2, ease: [0.22, 1, 0.36, 1] }} onPointerDown={(event) => event.stopPropagation()}>
+      <button ref={closeButton} className="modal-close" aria-label="Close how to play" onClick={close}><X size={18} /></button>
+      <header className="rules-heading"><span className="rules-mark" aria-hidden="true"><CambrioGlyph decorative /></span><div><p className="eyebrow">How to play</p><h2 id="rules-title">Remember. Trade. Stack.</h2><p id="rules-summary">Keep the lowest hidden total. Card positions never shift, so memory is your advantage.</p></div></header>
+      <div className="rules-flow" aria-label="Round flow">
+        <article><b>1</b><span><GameGlyph kind="peek" /><strong>Remember</strong></span><p>Hold to peek at your bottom-left and bottom-right cards once.</p></article>
+        <article><b>2</b><span><GameGlyph kind="swap" /><strong>Take a turn</strong></span><p>Draw privately, then discard it or replace one of your hidden cards.</p></article>
+        <article><b>3</b><span><GameGlyph kind="stack" /><strong>Race to stack</strong></span><p>After a discard, anyone may tap a remembered card with the same rank.</p></article>
+      </div>
+      <div className="rules-details">
+        <section><p className="eyebrow">Stacking</p><h3>Fast, public, and risky</h3><p>The first correct tap wins the race. A wrong rank stays put and gives you a hidden penalty card. If you stack another player’s card, give them one of yours.</p><div className="rule-example"><span className="example-card">8</span><b>=</b><span className="example-card face-down"><CambrioGlyph decorative /></span><small>Match rank, not suit</small></div></section>
+        <section><p className="eyebrow">Power cards</p><h3>Discard to activate</h3><div className="power-list"><span><b>7–8</b> Peek at one of yours</span><span><b>9–10</b> Peek at an opponent</span><span><b>J–Q</b> Blind-swap two cards</span><span><b>Black K</b> Peek, then choose to swap</span></div><p className="power-note">Replacing or stacking a power card does not activate it.</p></section>
+      </div>
+      <footer className="rules-finish"><span className="rules-finish-mark"><GameGlyph kind="cambio" /></span><div><strong>Call Cambrio when you’re ready</strong><p>The table completes the final rotation, then reveals every hand. Lowest score wins; red Kings are −1.</p></div><div className="value-strip" aria-label="Card values"><span>A<b>1</b></span><span>2–10<b>Face value</b></span><span>J · Q · black K<b>10</b></span><span>red K<b>−1</b></span></div></footer>
+    </motion.section>
+  </motion.div>;
 }
 
 function Landing({ connected, send, initialCode }: { connected: boolean; send: (action: RoomActionInput) => Promise<ActionAck>; initialCode?: string }) {
   const [name, setName] = useState(() => localStorage.getItem('cambrio:name') ?? '');
   const [code, setCode] = useState(initialCode ?? '');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'create' | 'join'>();
   const [error, setError] = useState('');
   const missingInvite = Boolean(initialCode && /does not exist|expired/i.test(error));
+  const nameReady = name.trim().length >= 2;
   const autoJoinAttempted = useRef(false);
   const submit = async (mode: 'create' | 'join') => {
-    setBusy(true); setError('');
+    setBusy(mode); setError('');
     localStorage.setItem('cambrio:name', name.trim());
     const result = await send(mode === 'create' ? { type: 'ROOM_CREATE', name } : { type: 'ROOM_JOIN', name, code: code.toUpperCase() });
     if (!result.ok) setError(result.message ?? 'Unable to continue.');
-    setBusy(false);
+    setBusy(undefined);
   };
   useEffect(() => {
     if (!connected || !initialCode || name.trim().length < 2 || autoJoinAttempted.current) return;
@@ -228,24 +272,32 @@ function Landing({ connected, send, initialCode }: { connected: boolean; send: (
         <p className="eyebrow">Memory. Nerve. Perfect timing.</p>
         <h1>Know your cards.<br /><em>Trust your read.</em></h1>
         <p className="lede">The private-room card game where every hidden card matters—and one fearless stack can change everything.</p>
+        <a className="hero-cta primary" href="#join-table">Create or join a table <ArrowRight size={17} /></a>
         <div className="feature-row"><span>2–8 players</span><span><Link2 size={13} />Private rooms</span><span>No download</span></div>
+        <div className="hero-tableau" aria-hidden="true">
+          <span className="hero-orbit" />
+          <span className="hero-card hero-card-back"><CardBackMark /></span>
+          <span className="hero-card hero-card-seven"><b>7</b><SuitMark suit="clubs" /></span>
+          <span className="hero-card hero-card-king"><b>K</b><SuitMark suit="hearts" /></span>
+          <span className="hero-memory-tag"><GameGlyph kind="peek" /><b>Remembered</b><small>BL · BR</small></span>
+        </div>
       </div>
-      <section className="join-panel glass">
+      <form id="join-table" className="join-panel glass" aria-busy={Boolean(busy)} onSubmit={(event) => { event.preventDefault(); if (!connected || busy || !nameReady) return; void submit(initialCode || code.length === 8 ? 'join' : 'create'); }}>
         <div className="mini-cards" aria-hidden="true"><i /><i /><i /></div>
         {initialCode ? <div className="invite-heading"><span>Private invite</span><h2>Join this table</h2><strong aria-label={`Room code ${initialCode}`}>{initialCode}</strong></div> : <h2>Take a seat</h2>}
-        <label>Your display name<input name="displayName" autoComplete="name" value={name} maxLength={20} onChange={(event) => setName(event.target.value)} placeholder="What should friends call you?" /></label>
+        <label>Your display name<input name="displayName" autoComplete="name" value={name} maxLength={20} aria-describedby="display-name-hint" onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key !== 'Enter' || !connected || busy || !nameReady) return; event.preventDefault(); void submit(initialCode || code.length === 8 ? 'join' : 'create'); }} placeholder="What should friends call you?" /><span id="display-name-hint" className={`input-hint ${nameReady ? 'ready' : ''}`}>{nameReady ? <><Check size={12} />Ready as {name.trim()}</> : 'Use 2–20 characters so friends recognize you.'}</span></label>
         {initialCode ? (
-          !missingInvite && <button className="primary wide" disabled={!connected || busy || name.trim().length < 2} onClick={() => void submit('join')}>Join room <ArrowRight size={17} /></button>
+          !missingInvite && <button type="submit" className="primary wide" aria-busy={busy === 'join'} disabled={!connected || Boolean(busy) || !nameReady}>{busy === 'join' ? <span className="button-spinner" /> : null}Join room <ArrowRight size={17} /></button>
         ) : (
           <>
-            <button className="primary wide" disabled={!connected || busy || name.trim().length < 2} onClick={() => void submit('create')}>Create private room <ArrowRight size={17} /></button>
+            <button type="button" className="primary wide" aria-busy={busy === 'create'} disabled={!connected || Boolean(busy) || !nameReady} onClick={() => void submit('create')}>{busy === 'create' ? <span className="button-spinner" /> : null}Create private room <ArrowRight size={17} /></button>
             <div className="or"><span>or join with a code</span></div>
-            <div className="code-row"><input name="roomCode" aria-label="Room code" className="code-input" value={code} maxLength={8} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="ABCD2345" /><button disabled={!connected || busy || code.length !== 8 || name.trim().length < 2} onClick={() => void submit('join')}>Join</button></div>
+            <div className="code-row"><input name="roomCode" aria-label="Room code" className="code-input" value={code} onChange={(event) => setCode(event.target.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, '').slice(0, 8))} placeholder="ABCD2345" /><button type="submit" aria-busy={busy === 'join'} disabled={!connected || Boolean(busy) || code.length !== 8 || !nameReady}>{busy === 'join' ? <span className="button-spinner" /> : null}Join</button></div>
           </>
         )}
-        {missingInvite ? <div className="expired-invite" role="alert"><strong>This table is no longer active.</strong><span>Room {initialCode} may have expired. Ask the host for a fresh link, or open a new table now.</span><div><button className="secondary" onClick={() => window.location.assign('/')}>Back home</button><button className="primary" disabled={!connected || busy || name.trim().length < 2} onClick={() => void submit('create')}>Start new table</button></div></div> : error && <p className="form-error" role="alert">{error}</p>}
+        {missingInvite ? <div className="expired-invite" role="alert"><strong>This table is no longer active.</strong><span>Room {initialCode} may have expired. Ask the host for a fresh link, or open a new table now.</span><div><button type="button" className="secondary" onClick={() => window.location.assign('/')}>Back home</button><button type="button" className="primary" disabled={!connected || Boolean(busy) || !nameReady} onClick={() => void submit('create')}>{busy === 'create' ? <span className="button-spinner" /> : null}Start new table</button></div></div> : error && <p className="form-error" role="alert">{error}</p>}
         <small>No account required. Your room expires two hours after everyone leaves.</small>
-      </section>
+      </form>
     </motion.main>
   );
 }
@@ -270,7 +322,7 @@ function Lobby({ room, send }: { room: RoomView; send: (action: RoomActionInput)
         <section className="glass player-list"><div className="section-heading"><div><h2>Players</h2><span>{room.players.length}/8 seated</span></div><div className="seat-meter" aria-label={`${room.players.length} of 8 seats filled`}>{Array.from({ length: 8 }, (_, index) => <i className={index < room.players.length ? 'filled' : ''} key={index} />)}</div></div><AnimatePresence initial={false}>{room.players.map((player) => <LobbyPlayer key={player.id} player={player} self={player.id === room.selfPlayerId} canRemove={Boolean(isHost && player.id !== room.selfPlayerId)} pending={pending === `remove:${player.id}`} remove={() => void act(`remove:${player.id}`, { type: 'ROOM_REMOVE', playerId: player.id })} />)}</AnimatePresence></section>
         <aside className="glass lobby-rules">
           <div className="briefing-title"><p className="eyebrow">Round in 3 steps</p><h2>Remember. Trade. Stack.</h2></div>
-          <div className="briefing-flow" aria-label="Quick rules"><span><b>1</b><small>Peek at your bottom two</small></span><span><b>2</b><small>Draw, discard, or swap</small></span><span><b>3</b><small>Stack the matching rank</small></span></div>
+          <div className="briefing-flow" aria-label="Quick rules"><span><b>1</b><div className="rule-copy"><GameGlyph kind="peek" /><small>Peek at your bottom two</small></div></span><span><b>2</b><div className="rule-copy"><GameGlyph kind="swap" /><small>Draw, discard, or swap</small></div></span><span><b>3</b><div className="rule-copy"><GameGlyph kind="stack" /><small>Stack the matching rank</small></div></span></div>
         </aside>
       </div>
       <div className="lobby-footer">
@@ -456,11 +508,12 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
   };
   const turnDecisionPending = pendingGroups.includes('turn-decision');
   const powerPending = pendingGroups.includes('power');
+  const cambioPending = pendingGroups.includes('CALL_CAMBIO');
   const selectionKind = power && (power.kind === 'own_peek' || power.kind === 'opponent_peek') ? 'peek' : power ? 'swap' : undefined;
   const receivingDiscard = Boolean(tableCue?.movements.some((movement) => movement.to.zone === 'discard'));
 
   return (
-    <motion.main className={`game-page ${stackReady ? 'stack-mode' : ''} ${revealVisible ? 'reveal-focus-mode' : ''} ${paused ? 'is-paused' : ''}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+    <motion.main className={`game-page ${stackReady ? 'stack-mode' : ''} ${revealVisible ? 'reveal-focus-mode' : ''} ${paused ? 'is-paused' : ''}`} style={{ '--table-flight-duration': tableCue ? `${flightDuration(tableCue.kind)}s` : undefined } as CSSProperties} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="game-status"><span className="room-pill" data-short={room.code.slice(0, 2)}>{room.code}</span><TurnBanner game={game} self={self} /><Countdown deadline={game.deadlineAt} pausedMs={game.paused?.remainingMs} /></div>
       <section className="opponent-rail" aria-label="Other players" style={{ '--opponent-count': Math.max(1, opponents.length) } as CSSProperties}>
         {opponents.map((opponent) => <PlayerHand key={opponent.id} player={opponent} compact canInteract={() => canInteract(opponent)} highlight={() => isContextTarget(opponent)} targetCue={targetCue(opponent)} selectionKind={selectionKind} selectedCards={power?.targets} pendingCardId={pendingCardId} arrivingSlots={flightSlots(tableCue, opponent.id)} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, opponent)} active={game.activePlayerId === opponent.id} />)}
@@ -470,7 +523,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
         {game.paused && <PauseBanner game={game} />}
         <div className="pile-zone">
           <div className={`pile ${receivingDiscard ? 'receiving-flight' : ''}`} data-table-zone="discard"><div className="discard-stack">{receivingDiscard && tableCue?.coveredDiscard && <span className="covered-discard" aria-hidden="true"><Card card={tableCue.coveredDiscard} /></span>}<span className="current-discard"><Card card={game.discard} faceDown={!game.discard} /></span></div><span>{game.discard ? 'DISCARD' : 'EMPTY'}</span></div>
-          <button data-table-zone="deck" className={`deck-card ${isTurn && game.turnStage === 'awaiting_draw' ? 'draw-ready' : ''} ${pendingGroups.includes('DRAW') ? 'is-pending' : ''}`} aria-busy={pendingGroups.includes('DRAW')} disabled={!isTurn || game.turnStage !== 'awaiting_draw' || Boolean(game.transfer) || pendingGroups.includes('DRAW')} onClick={() => { vibrate(10); void performAction({ type: 'DRAW' }); }} title={`Draw from deck; ${game.deckCount} cards remain`}><CardBackMark />{pendingGroups.includes('DRAW') && <span className="deck-pending" aria-hidden="true" />}<small>{game.deckCount}</small></button>
+          <div className={`pile deck-pile ${isTurn && game.turnStage === 'awaiting_draw' ? 'actionable' : ''}`}><button data-table-zone="deck" className={`deck-card ${isTurn && game.turnStage === 'awaiting_draw' ? 'draw-ready' : ''} ${pendingGroups.includes('DRAW') ? 'is-pending' : ''}`} aria-busy={pendingGroups.includes('DRAW')} disabled={!isTurn || game.turnStage !== 'awaiting_draw' || Boolean(game.transfer) || pendingGroups.includes('DRAW')} onClick={() => { vibrate(10); void performAction({ type: 'DRAW' }); }} title={`Draw from deck; ${game.deckCount} cards remain`}><CardBackMark />{pendingGroups.includes('DRAW') && <span className="deck-pending" aria-hidden="true" />}<small>{game.deckCount}</small></button><span>{isTurn && game.turnStage === 'awaiting_draw' ? 'DRAW' : 'DECK'}</span></div>
         </div>
         <span className="drawn-flight-anchor" data-table-zone="drawn" aria-hidden="true" />
         <AnimatePresence mode="wait" initial={false}>
@@ -478,8 +531,8 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
         </AnimatePresence>
       </section>
 
-      <section className="self-zone"><PlayerHand player={self} canInteract={() => canInteract(self)} highlight={() => isContextTarget(self)} targetCue={targetCue(self)} selectionKind={selectionKind} selectedCards={power?.targets} pendingCardId={pendingCardId} arrivingSlots={flightSlots(tableCue, self.id)} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, self)} active={isTurn} /><span className="you-label">YOU &middot; {self.cards.length ? `${self.cards.length}/${MAX_HAND_CARDS} CARDS` : 'OUT'}</span></section>
-      <div className="game-actions">{canCallCambrio && <button className="cambio-button" onClick={() => { vibrate(24); void send({ type: 'CALL_CAMBIO' }); }}><GameGlyph kind="cambio" />Call Cambrio</button>}</div>
+      <section className="self-zone"><PlayerHand player={self} canInteract={() => canInteract(self)} highlight={() => isContextTarget(self)} targetCue={targetCue(self)} selectionKind={selectionKind} selectedCards={power?.targets} pendingCardId={pendingCardId} arrivingSlots={flightSlots(tableCue, self.id)} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, self)} active={isTurn} /><span className="you-label">{isTurn ? 'YOUR TURN' : 'YOU'} &middot; {self.cards.length ? `${self.cards.length}/${MAX_HAND_CARDS} CARDS` : 'OUT'}</span></section>
+      <div className="game-actions">{canCallCambrio && <button className={`cambio-button ${cambioPending ? 'is-pending' : ''}`} aria-busy={cambioPending} disabled={cambioPending} onClick={() => { vibrate(24); void performAction({ type: 'CALL_CAMBIO' }); }}>{cambioPending ? <span className="button-spinner" /> : <GameGlyph kind="cambio" />}Call Cambrio</button>}</div>
       {game.paused && <PauseRecoveryControl room={room} game={game} sendRoom={sendRoom} />}
       <AnimatePresence>{stackFeedback && stackFeedback.kind !== 'trying' && <motion.div className={`stack-result ${stackFeedback.kind}`} initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, y: -8 }}>{stackFeedback.kind === 'correct' ? 'MATCH — STACKED' : stackFeedback.kind === 'wrong' ? 'NO MATCH — PENALTY CARD' : stackFeedback.kind === 'locked' ? 'NO MATCH — WAIT FOR NEXT DISCARD' : 'STACK ALREADY TAKEN'}</motion.div>}</AnimatePresence>
       <AnimatePresence>{tableCue && <SwapFlightLayer key={`flight-${tableCue.id}`} cue={tableCue} />}</AnimatePresence>
@@ -492,6 +545,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
 
 function InitialPeek({ room, game, self, send, sendRoom }: { room: RoomView; game: GameView; self: PlayerView; send: (action: GameActionInput) => Promise<ActionAck>; sendRoom: (action: RoomActionInput) => Promise<ActionAck> }) {
   const [holding, setHolding] = useState(false);
+  const peekPlayers = game.players.filter((player) => !player.forfeited);
   const reduceMotion = useReducedMotion();
   const holdingRef = useRef(false);
   const startedRef = useRef(false);
@@ -539,10 +593,10 @@ function InitialPeek({ room, game, self, send, sendRoom }: { room: RoomView; gam
   }, [end]);
   return (
     <main className={`peek-screen ${holding ? 'holding' : ''} ${game.paused ? 'is-paused' : ''}`}>
-      <motion.div className="peek-copy" initial={reduceMotion ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduceMotion ? 0 : .28 }}><p className="eyebrow">One look. Then remember.</p><h1>Your bottom two cards</h1><p>Hold below to see bottom left and bottom right. Their positions will never shift.</p></motion.div>
+      <motion.div className="peek-copy" initial={reduceMotion ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduceMotion ? 0 : .28 }}><p className="eyebrow">One look. Then remember.</p><h1>Your bottom two cards</h1><p id="peek-instructions">Hold below to see bottom left and bottom right. Their positions will never shift.</p></motion.div>
       <div className="peek-hand">{self.cards.map((card, index) => <motion.div className="hand-slot" data-peekable={card.slot >= 2 || undefined} key={card.id} style={{ gridColumn: card.slot % 2 + 1, gridRow: Math.floor(card.slot / 2) + 1 }} initial={reduceMotion ? false : { opacity: 0, y: -54, x: (index % 2 ? 1 : -1) * 12, rotate: (index % 2 ? 1 : -1) * 5 }} animate={{ opacity: 1, y: 0, x: 0, rotate: 0 }} transition={{ delay: reduceMotion ? 0 : .08 + index * .075, duration: reduceMotion ? 0 : .36, ease: [0.22, 1, 0.36, 1] }}><Card card={card} faceDown={!holding || card.slot < 2} positioned slot={card.slot} /></motion.div>)}</div>
-      {game.paused ? <PauseBanner game={game} inline /> : self.initialPeekComplete ? <motion.div className="waiting-ready" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><span className="spinner" />Waiting for everyone…</motion.div> : <motion.button className="hold-button" onPointerDown={begin} onPointerUp={end} onPointerCancel={end} onPointerLeave={end} animate={{ scale: holding ? .97 : 1, y: holding ? 2 : 0 }} transition={{ duration: reduceMotion ? 0 : .12 }}><GameGlyph kind="peek" />{holding ? 'Memorize bottom two' : 'Hold to peek'}</motion.button>}
-      <motion.div className="ready-progress" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: reduceMotion ? 0 : .42 }}>{game.players.filter((player) => player.initialPeekComplete).length}/{game.players.length} ready</motion.div>
+      {game.paused ? <PauseBanner game={game} inline /> : self.initialPeekComplete ? <motion.div className="waiting-ready" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><span className="spinner" />Waiting for everyone…</motion.div> : <motion.button className="hold-button" aria-describedby="peek-instructions" onPointerDown={begin} onPointerUp={end} onPointerCancel={end} onPointerLeave={end} onKeyDown={(event) => { if (event.key !== ' ' && event.key !== 'Enter') return; event.preventDefault(); if (!event.repeat) begin(); }} onKeyUp={(event) => { if (event.key !== ' ' && event.key !== 'Enter') return; event.preventDefault(); end(); }} onBlur={end} animate={{ scale: holding ? .97 : 1, y: holding ? 2 : 0 }} transition={{ duration: reduceMotion ? 0 : .12 }}><GameGlyph kind="peek" />{holding ? 'Memorize bottom two' : 'Hold to peek'}</motion.button>}
+      <motion.div className="peek-meta" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: reduceMotion ? 0 : .42 }}><span className="ready-progress">{peekPlayers.filter((player) => player.initialPeekComplete).length}/{peekPlayers.length} ready</span><Countdown deadline={game.deadlineAt} pausedMs={game.paused?.remainingMs} /></motion.div>
       {game.paused && <PauseRecoveryControl room={room} game={game} sendRoom={sendRoom} />}
     </main>
   );
@@ -565,8 +619,13 @@ function ActionSequence({ labels, selected }: { labels: string[]; selected: numb
 }
 
 function Results({ room, game, sendRoom }: { room: RoomView; game: GameView; sendRoom: (action: RoomActionInput) => Promise<ActionAck> }) {
-  const rows = game.results!.map((result) => ({ result, player: game.players.find((player) => player.id === result.playerId)! })).sort((a, b) => (a.result.score ?? 999) - (b.result.score ?? 999));
-  const winnerNames = rows.filter((row) => row.result.winner).map((row) => row.player.name).join(' & ');
+  const sortedRows = game.results!.map((result) => ({ result, player: game.players.find((player) => player.id === result.playerId)! })).sort((a, b) => (a.result.score ?? 999) - (b.result.score ?? 999));
+  const rows = sortedRows.map((row) => ({
+    ...row,
+    place: row.result.forfeited ? undefined : sortedRows.findIndex((candidate) => candidate.result.score === row.result.score) + 1,
+  }));
+  const winners = rows.filter((row) => row.result.winner).map((row) => row.player.name);
+  const winnerNames = winners.length <= 2 ? winners.join(' & ') : `${winners[0]} & ${winners.length - 1} others`;
   const isHost = room.hostPlayerId === room.selfPlayerId;
   const reduceMotion = useReducedMotion();
   const winnerCount = rows.filter((row) => row.result.winner).length;
@@ -574,9 +633,10 @@ function Results({ room, game, sendRoom }: { room: RoomView; game: GameView; sen
   const returnToLobby = async () => { if (returning) return; setReturning(true); try { await sendRoom({ type: 'ROOM_REMATCH' }); } finally { setReturning(false); } };
   return <motion.main className="results-page" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: reduceMotion ? 0 : .22 }}>
     <motion.header className="results-hero" initial={reduceMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduceMotion ? 0 : .32 }}>
+      <span className="results-halo" aria-hidden="true">{Array.from({ length: 10 }, (_, index) => <i key={index} />)}</span>
       <span className="winner-mark" aria-hidden="true"><CambrioGlyph decorative /></span><p className="eyebrow">Round complete</p><h1>{winnerNames} {winnerCount > 1 ? 'win' : 'wins'}!</h1><p>Lowest score takes the table.</p>
     </motion.header>
-    <section className="results-list glass" aria-label="Final scores">{rows.map(({ player, result }, index) => <motion.div key={player.id} className={`result-row ${result.winner ? 'winner' : ''}`} initial={reduceMotion ? false : { opacity: 0, y: 13 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: reduceMotion ? 0 : .16 + index * .065, duration: reduceMotion ? 0 : .28, ease: [0.22, 1, 0.36, 1] }}><span className="place">{result.forfeited ? '—' : index + 1}</span><div><strong>{player.name}{player.id === room.selfPlayerId ? ' (you)' : ''}</strong><div className="result-cards">{player.cards.map((card, cardIndex) => <motion.span className="result-card-wrap" key={card.id} initial={reduceMotion ? false : { opacity: 0, y: -9, rotate: cardIndex % 2 ? 2 : -2 }} animate={{ opacity: 1, y: 0, rotate: 0 }} transition={{ delay: reduceMotion ? 0 : .24 + index * .065 + cardIndex * .035, duration: reduceMotion ? 0 : .22 }}><Card card={card} mini /></motion.span>)}</div></div><strong className="score"><span className="sr-only">Score </span>{result.score ?? 'Forfeit'}</strong></motion.div>)}</section>
+    <section className="results-list glass" aria-label="Final scores">{rows.map(({ player, result, place }, index) => <motion.div key={player.id} className={`result-row ${result.winner ? 'winner' : ''}`} initial={reduceMotion ? false : { opacity: 0, y: 13 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: reduceMotion ? 0 : .16 + index * .065, duration: reduceMotion ? 0 : .28, ease: [0.22, 1, 0.36, 1] }}><span className="place" aria-label={place ? `Place ${place}` : 'Forfeited'}>{place ?? '—'}</span><div><strong>{player.name}{player.id === room.selfPlayerId ? ' (you)' : ''}</strong><div className="result-cards">{player.cards.map((card, cardIndex) => <motion.span className="result-card-wrap" key={card.id} initial={reduceMotion ? false : { opacity: 0, y: -9, rotate: cardIndex % 2 ? 2 : -2 }} animate={{ opacity: 1, y: 0, rotate: 0 }} transition={{ delay: reduceMotion ? 0 : .24 + index * .065 + cardIndex * .035, duration: reduceMotion ? 0 : .22 }}><Card card={card} mini /></motion.span>)}</div></div><strong className="score"><span className="sr-only">Score </span>{result.score ?? 'Forfeit'}</strong></motion.div>)}</section>
     {isHost ? <motion.button className={`primary deal ${returning ? 'is-pending' : ''}`} aria-busy={returning} disabled={returning} initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: reduceMotion ? 0 : .3 + rows.length * .065 }} onClick={() => void returnToLobby()}>{returning && <span className="button-spinner" />}Return to lobby</motion.button> : <p className="waiting-host">Waiting for the host to return to the lobby…</p>}
   </motion.main>;
 }
@@ -632,17 +692,17 @@ function flightSlots(cue: TableCue | undefined, playerId: string): number[] {
 type FlightGeometry = { cardId: string; from: DOMRect; to: DOMRect; fromLabel: string; toLabel: string; face?: CardView; faceDirection?: 'reveal' | 'conceal' };
 
 function flightDuration(kind: TableCue['kind']): number {
-  if (kind === 'draw') return .66;
-  if (kind === 'discard' || kind === 'stack') return .82;
-  if (kind === 'transfer') return .9;
-  return 1.02;
+  if (kind === 'draw') return .72;
+  if (kind === 'discard' || kind === 'stack') return .9;
+  if (kind === 'transfer') return 1.05;
+  return 1.44;
 }
 
 function cueLifetime(kind: TableCue['kind']): number {
-  if (kind === 'draw') return 760;
-  if (kind === 'discard' || kind === 'stack') return 920;
-  if (kind === 'transfer') return 1_020;
-  return 1_380;
+  if (kind === 'draw') return 840;
+  if (kind === 'discard' || kind === 'stack') return 1_020;
+  if (kind === 'transfer') return 1_220;
+  return 1_720;
 }
 
 function SwapFlightLayer({ cue }: { cue: TableCue }) {
@@ -672,8 +732,8 @@ function SwapFlightLayer({ cue }: { cue: TableCue }) {
         data-flight-distance={Math.round(Math.hypot(flight.to.left - flight.from.left, flight.to.top - flight.from.top))}
         style={{ left: flight.from.left, top: flight.from.top, width: flight.from.width, height: flight.from.height, transformOrigin: 'top left' }}
         initial={{ x: 0, y: 0, rotate: index === 0 ? -2 : 2, scaleX: 1, scaleY: 1, opacity: 1 }}
-        animate={{ x: [0, middleX, deltaX, deltaX], y: [0, middleY, deltaY, deltaY], rotate: index === 0 ? [-2, -7, 0, 0] : [2, 7, 0, 0], scaleX: [1, Math.sqrt(destinationScaleX), destinationScaleX, destinationScaleX], scaleY: [1, Math.sqrt(destinationScaleY), destinationScaleY, destinationScaleY], opacity: [1, 1, 1, 0] }}
-        transition={{ duration, times: [0, .48, .9, 1], ease: [0.22, 1, 0.36, 1] }}><span className="flight-surface flight-back"><CardBackMark /></span>{flight.face?.rank && flight.face.suit && <span className={`flight-surface flight-front ${flight.face.suit === 'hearts' || flight.face.suit === 'diamonds' ? 'red' : ''}`}><strong>{flight.face.rank}</strong><SuitMark suit={flight.face.suit} /></span>}{flights.length > 1 && <b>{index + 1}</b>}</motion.span>;
+        animate={{ x: [0, 0, middleX, deltaX, deltaX], y: [0, 0, middleY, deltaY, deltaY], rotate: index === 0 ? [-2, -2, -7, 0, 0] : [2, 2, 7, 0, 0], scaleX: [1, 1, Math.sqrt(destinationScaleX), destinationScaleX, destinationScaleX], scaleY: [1, 1, Math.sqrt(destinationScaleY), destinationScaleY, destinationScaleY], opacity: [1, 1, 1, 1, 0] }}
+        transition={{ duration, times: [0, .1, .54, .91, 1], ease: [0.4, 0, 0.2, 1] }}><span className="flight-surface flight-back"><CardBackMark /></span>{flight.face?.rank && flight.face.suit && <span className={`flight-surface flight-front ${flight.face.suit === 'hearts' || flight.face.suit === 'diamonds' ? 'red' : ''}`}><strong>{flight.face.rank}</strong><SuitMark suit={flight.face.suit} /></span>}{flights.length > 1 && <b>{index + 1}</b>}</motion.span>;
     })}
   </motion.div>;
 }
@@ -686,7 +746,8 @@ function locationRect(location: TableLocation): DOMRect | undefined {
 }
 
 function TableActionCue({ cue }: { cue: TableCue }) {
-  return <motion.div className={`table-action-cue ${cue.kind}`} role="status" aria-live="polite" initial={{ opacity: 0, y: 10, scale: .94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, transition: { duration: .12 } }} transition={{ delay: .42, duration: .18 }}>
+  const reduceMotion = useReducedMotion();
+  return <motion.div className={`table-action-cue ${cue.kind}`} role="status" aria-live="polite" aria-atomic="true" initial={reduceMotion ? false : { opacity: 0, y: 10, scale: .94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, transition: { duration: reduceMotion ? 0 : .12 } }} transition={{ delay: reduceMotion ? 0 : .15, duration: reduceMotion ? 0 : .22 }}>
     {cue.kind === 'discard' ? <span className="cue-icon" aria-hidden="true"><GameGlyph kind="discard" /></span> : <span className="cue-cards" aria-hidden="true"><i /><i /></span>}
     <span><strong>{cue.title}</strong><small>{cue.from} <b>{cue.kind === 'exchange' ? '↔' : '→'}</b> {cue.to}</small></span>
   </motion.div>;
@@ -695,10 +756,18 @@ function TableActionCue({ cue }: { cue: TableCue }) {
 type CardTargetCue = 'step-1' | 'step-2' | 'swap' | 'give';
 
 function PlayerHand({ player, compact = false, canInteract, highlight, targetCue, selectionKind, selectedCards = [], pendingCardId, arrivingSlots = [], feedback, reveal = false, active = false, onCard }: { player: PlayerView; compact?: boolean; canInteract?: (card: CardView) => boolean; highlight?: (card: CardView) => boolean; targetCue?: CardTargetCue; selectionKind?: 'peek' | 'swap'; selectedCards?: string[]; pendingCardId?: string; arrivingSlots?: number[]; feedback?: { cardId: string; kind: StackFeedback }; reveal?: boolean; active?: boolean; onCard: (card: CardView) => void }) {
+  const handRef = useRef<HTMLDivElement>(null);
+  const reduceMotion = useReducedMotion();
+  useEffect(() => {
+    const hand = handRef.current;
+    const rail = hand?.parentElement;
+    if (!active || !compact || !hand || !rail || rail.scrollWidth <= rail.clientWidth) return;
+    hand.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'nearest', inline: 'center' });
+  }, [active, compact, reduceMotion]);
   const highestSlot = player.cards.reduce((highest, card) => Math.max(highest, card.slot), 3);
   const slotCount = Math.max(4, highestSlot + 1);
   const cardsBySlot = new Map(player.cards.map((card) => [card.slot, card]));
-  return <div className={`player-hand ${compact ? 'compact' : ''} ${active ? 'active-turn' : ''}`}>
+  return <div ref={handRef} className={`player-hand ${compact ? 'compact' : ''} ${active ? 'active-turn' : ''}`}>
     <div className="seat-name"><span>{player.name}</span>{!player.connected && <i>OFFLINE</i>}</div>
     <div className="hand-cards" aria-label={`${player.name}'s cards`}>
       {Array.from({ length: slotCount }, (_, slot) => {
@@ -732,19 +801,22 @@ export function Card({ card, faceDown = false, interactive = false, mini = false
 function TurnBanner({ game, self }: { game: GameView; self: PlayerView }) {
   const active = game.players.find((player) => player.id === game.activePlayerId);
   const endingPlayer = game.ending ? game.players.find((player) => player.id === game.ending!.triggerPlayerId) : undefined;
+  const reduceMotion = useReducedMotion();
   if (game.paused) {
     const disconnected = game.players.filter((player) => game.paused!.playerIds.includes(player.id));
-    return <div className="turn-banner paused"><strong>{disconnected.length === 1 ? `${disconnected[0].name} disconnected` : `${disconnected.length} players disconnected`}</strong><span>Game paused · seat saved</span></div>;
+    return <div className="turn-banner paused" role="status" aria-live="polite"><strong>{disconnected.length === 1 ? `${disconnected[0].name} disconnected` : `${disconnected.length} players disconnected`}</strong><span>Game paused · seat saved</span></div>;
   }
-  if (game.transfer) return <div className="turn-banner"><strong>Card transfer</strong><span>Finish the successful stack</span></div>;
-  return <div className={`turn-banner ${active?.id === self.id ? 'your-turn' : ''} ${game.ending ? 'ending-turn' : ''}`}>{game.ending && <span className="ending-state" role="status" aria-live="assertive"><CambrioGlyph decorative compact /><b>{game.ending.reason === 'cambio' ? 'CAMBRIO CALLED' : 'ZERO CARDS'}</b></span>}<strong>{active?.id === self.id ? 'Your turn' : `${active?.name ?? 'Player'}'s turn`}</strong><span>{game.ending ? `${endingPlayer?.name ?? 'Player'} · ${game.ending.turnsRemaining === 0 ? 'final turn' : `${game.ending.turnsRemaining} ${game.ending.turnsRemaining === 1 ? 'turn' : 'turns'} after this one`}` : game.turnStage === 'awaiting_draw' ? 'Draw from the deck' : game.turnStage === 'deciding' ? 'Discard or swap' : 'Resolving a power'}</span></div>;
+  if (game.transfer) return <div className="turn-banner" role="status" aria-live="polite"><strong>Card transfer</strong><span>Finish the successful stack</span></div>;
+  return <div className={`turn-banner ${active?.id === self.id ? 'your-turn' : ''} ${game.ending ? 'ending-turn' : ''}`} role="status" aria-live="polite" aria-atomic="true">{game.ending && <span className="ending-state" role="status" aria-live="assertive"><CambrioGlyph decorative compact /><b>{game.ending.reason === 'cambio' ? 'CAMBRIO CALLED' : 'ZERO CARDS'}</b></span>}<motion.strong key={active?.id ?? 'none'} initial={reduceMotion ? false : { opacity: .62, y: -5, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: reduceMotion ? 0 : .28, ease: [0.22, 1, 0.36, 1] }}>{active?.id === self.id ? 'Your turn' : `${active?.name ?? 'Player'}'s turn`}</motion.strong><span>{game.ending ? `${endingPlayer?.name ?? 'Player'} · ${game.ending.turnsRemaining === 0 ? 'final turn' : `${game.ending.turnsRemaining} ${game.ending.turnsRemaining === 1 ? 'turn' : 'turns'} after this one`}` : game.turnStage === 'awaiting_draw' ? 'Draw from the deck' : game.turnStage === 'deciding' ? 'Discard or swap' : 'Resolving a power'}</span></div>;
 }
 
 function Countdown({ deadline, pausedMs }: { deadline?: number; pausedMs?: number }) {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => { const update = () => setSeconds(Math.max(0, Math.ceil(((deadline ?? Date.now()) - Date.now()) / 1000))); update(); const timer = window.setInterval(update, 250); return () => clearInterval(timer); }, [deadline]);
-  if (pausedMs !== undefined) return <span className="countdown paused" title={`Paused with ${Math.ceil(pausedMs / 1000)} seconds remaining`} aria-label="Timer paused"><i /><i /></span>;
-  return <span className={`countdown ${seconds <= 10 ? 'urgent' : ''}`}>{seconds}s</span>;
+  const remaining = pausedMs !== undefined ? Math.max(0, Math.ceil(pausedMs / 1000)) : seconds;
+  const timerStyle = { '--time-progress': `${Math.min(360, Math.max(0, remaining / 45 * 360))}deg` } as CSSProperties;
+  if (pausedMs !== undefined) return <span className="countdown paused" style={timerStyle} title={`Paused with ${remaining} seconds remaining`} aria-label="Timer paused"><i /><i /></span>;
+  return <span className={`countdown ${seconds <= 10 ? 'urgent' : ''}`} style={timerStyle} role="timer" aria-label={`${seconds} seconds remaining`}>{seconds}s</span>;
 }
 
 function PauseBanner({ game, inline = false }: { game: GameView; inline?: boolean }) {

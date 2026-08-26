@@ -19,6 +19,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --pool=threads --no-file-parallelism",
+    "test:browser": "playwright test",
+    "test:browser:ui": "playwright test --ui",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "smoke:runtime": "node scripts/runtime-smoke.mjs",
@@ -27,7 +29,8 @@
     "stress:socket": "node scripts/socket-load-smoke.mjs",
     "stress:actions": "node scripts/action-spam-smoke.mjs",
     "audit:eight": "node scripts/eight-player-audit.mjs",
-    "check": "npm run lint && npm run typecheck && npm test && npm run build"
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "check:release": "npm run check && npm run test:browser && npm run smoke:runtime && npm run smoke:reconnect && npm run smoke:http && npm run stress:actions && npm run stress:socket"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
@@ -47,7 +50,9 @@
     "zod": "^4.1.11"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "^9.37.0",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.1.14",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",

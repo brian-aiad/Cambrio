@@ -5,9 +5,11 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: { outDir: 'dist/client' },
+  test: {
+    include: ['src/**/*.test.ts'],
+  },
   server: {
     port: 5173,
     proxy: { '/api': 'http://localhost:3001', '/socket.io': { target: 'http://localhost:3001', ws: true } },
   },
 });
-

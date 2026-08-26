@@ -57,10 +57,28 @@ export function useGameAudio() {
     oscillator.stop(audio.currentTime + 0.17);
   }, [getContext, settings.effects]);
 
+  const playTurn = useCallback(() => {
+    if (!settings.effects) return;
+    const audio = getContext();
+    [0, 0.09].forEach((offset, index) => {
+      const oscillator = audio.createOscillator();
+      const gain = audio.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(index === 0 ? 440 : 660, audio.currentTime + offset);
+      gain.gain.setValueAtTime(0.0001, audio.currentTime + offset);
+      gain.gain.exponentialRampToValueAtTime(0.038, audio.currentTime + offset + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + offset + 0.13);
+      oscillator.connect(gain).connect(audio.destination);
+      oscillator.start(audio.currentTime + offset);
+      oscillator.stop(audio.currentTime + offset + 0.14);
+    });
+  }, [getContext, settings.effects]);
+
   return {
     settings,
     toggleEffects: () => setSettings((value) => ({ ...value, effects: !value.effects })),
     toggleAmbience: () => setSettings((value) => ({ ...value, ambience: !value.ambience })),
     playNotice,
+    playTurn,
   };
 }
