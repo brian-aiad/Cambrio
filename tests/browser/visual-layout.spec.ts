@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const scenes = [
-  'initial', 'initial-paused', 'awaiting', 'opponent-turn', 'paused', 'drawn',
+  'initial', 'initial-paused', 'awaiting', 'opponent-turn', 'opponent-drawn', 'paused', 'drawn',
   'own-select', 'own-reveal', 'opponent-select', 'opponent-reveal',
   'blind-own', 'blind-opponent', 'black-own', 'black-opponent', 'black-reveal',
   'black-choice', 'transfer', 'ending', 'six', 'zero', 'all-six', 'six-wrong',
@@ -153,14 +153,49 @@ test('compact opponent rail keeps cards readable and follows a distant active se
     return {
       scrollable: rail.scrollWidth > rail.clientWidth,
       moved: rail.scrollLeft > 0,
+      pageStayedPut: window.scrollX === 0,
       activeVisible: activeRect.left >= railRect.left - 1 && activeRect.right <= railRect.right + 1,
       cardWidth: card.getBoundingClientRect().width,
     };
   });
   expect(metrics.scrollable).toBe(true);
   expect(metrics.moved).toBe(true);
+  expect(metrics.pageStayedPut).toBe(true);
   expect(metrics.activeVisible).toBe(true);
   expect(metrics.cardWidth).toBeGreaterThanOrEqual(26);
+});
+
+test('an opponent draw stays attached to its owner without covering piles or the local hand', async ({ page }) => {
+  for (const viewport of [
+    { width: 320, height: 568 },
+    { width: 390, height: 844 },
+    { width: 844, height: 390 },
+    { width: 1440, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const active of [1, 7]) {
+      await page.goto(`/__visual-audit?scene=opponent-drawn&players=8&active=${active}`);
+      await page.waitForTimeout(700);
+      const metrics = await page.evaluate(() => {
+        const stage = document.querySelector<HTMLElement>('.decision-card-anchor')!.getBoundingClientRect();
+        const activeHand = document.querySelector<HTMLElement>('.player-hand.active-turn')!.getBoundingClientRect();
+        const obstacles = [
+          document.querySelector<HTMLElement>('.deck-card')!.getBoundingClientRect(),
+          document.querySelector<HTMLElement>('[data-table-zone="discard"] .playing-card')!.getBoundingClientRect(),
+          document.querySelector<HTMLElement>('.self-zone .hand-cards')!.getBoundingClientRect(),
+        ];
+        const intersects = (first: DOMRect, second: DOMRect) => first.left < second.right - 1 && first.right > second.left + 1 && first.top < second.bottom - 1 && first.bottom > second.top + 1;
+        return {
+          pageStayedPut: window.scrollX === 0,
+          ownerDistance: Math.abs((stage.left + stage.right) / 2 - (activeHand.left + activeHand.right) / 2),
+          collisions: obstacles.map((obstacle) => intersects(stage, obstacle)),
+        };
+      });
+      expect(metrics.pageStayedPut).toBe(true);
+      expect(metrics.ownerDistance).toBeLessThanOrEqual(viewport.height <= 500 ? 75 : 22);
+      expect(metrics.collisions).toEqual([false, false, false]);
+    }
+  }
 });
 
 test('six-card opponent hands preserve every target without vertical clipping', async ({ page }) => {

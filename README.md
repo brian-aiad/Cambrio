@@ -25,7 +25,7 @@ npm run stress:socket
 npm run stress:actions
 ```
 
-`npm run check` runs linting, strict TypeScript checks, 79 deterministic rules and server tests, the one-player lobby gate, 350 randomized full games across every supported 2–8 player room size, an exhaustive 203-case caller/active-seat ending matrix, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run test:browser` runs 25 real-Chromium lifecycle, entry-form, rules-guide, viewport, turn-affordance, motion-budget, reduced-motion, and WCAG A/AA checks. `npm run check:release` runs both suites plus runtime, reconnect, hosted HTTP, action-race, and 96-client Socket.IO smokes. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
+`npm run check` runs linting, strict TypeScript checks, 79 deterministic rules and server tests, the one-player lobby gate, 350 randomized full games across every supported 2–8 player room size, an exhaustive 203-case caller/active-seat ending matrix, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run test:browser` runs 28 real-Chromium lifecycle, entry-form, rules-guide, viewport, turn-affordance, spectator-choreography, motion-budget, reduced-motion, and WCAG A/AA checks. `npm run check:release` runs both suites plus runtime, reconnect, hosted HTTP, action-race, and 96-client Socket.IO smokes. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
 
 ## Free production hosting
 

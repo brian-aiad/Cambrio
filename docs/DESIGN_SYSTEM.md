@@ -28,6 +28,7 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 - A globally available **How to play** guide teaches the round as Remember → Take a turn → Race to stack, then explains powers, Cambrio, and card values. It is a contained, scrollable dialog on short screens, supports Escape, restores keyboard focus, and never changes or pauses authoritative state.
 - Tap the deck to draw.
 - After a draw, tap **Discard** or tap one highlighted owned slot to replace it.
+- Other players never borrow the viewer's private draw panel. Their hidden draw travels from the deck to a named, face-down decision card physically attached to their seat. That card remains staged through **DRAWING → CHOOSING**, then becomes the exact source for **DISCARDING** or **SWAPPING**.
 - During an open stack race, tap any remembered table card directly. There is no stack-mode button and no player-selection modal.
 - Power cards immediately mark only legal targets. A compact numbered action strip shows the completed and current step; the selected source stays visibly numbered on the physical card, so Jack/Queen and Black King never depend on a sentence to explain what happens next. Regular-height dense rails avoid repeated badges; the shortest swipe rail restores them because its larger targets can carry the step marker clearly.
 - Peeks reveal immediately after one legal card tap, remain visible for a short timed memory window, then conceal and complete automatically. Leaving or blurring the window conceals immediately.
@@ -42,6 +43,7 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 - A card identity keeps a shared layout identity while moving between slots and piles; the animation communicates the state change instead of decorating it.
 - Blind swaps and Black King exchanges animate two numbered, face-down cards between their exact player and slot endpoints on a deliberate 1.44-second path. A persistent movement card names both player/slot endpoints while the destinations remain empty until arrival, so there is no ambiguous duplicate state.
 - A normal hand replacement and a successful stack animate from the exact source slot to discard. The travelling card turns face-up before arrival, making the public card change observable to every player.
+- Replacements use two numbered paths with staggered starts: the old slot lifts first toward discard, then the staged hidden draw follows into that exact vacancy. Wrong-stack penalties likewise travel from the deck into the recipient's stable +1/+2 slot instead of appearing instantly.
 - Cambrio and zero-card endings occupy the permanent turn-status column with the current player and remaining-turn count; they never cover an opponent card.
 - Notices belong to the screen that created them. Spatial swaps, deal instructions, ending calls, and rematch confirmation use their native table/lobby state instead of duplicate toasts over the hand.
 - Correct stack: selected card lifts/scales, travels to discard, success cue remains long enough to read.

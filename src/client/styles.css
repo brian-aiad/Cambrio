@@ -328,6 +328,18 @@ input:focus { border-color: #7d77dc; box-shadow: 0 0 0 4px rgba(92,86,200,.09); 
 .drawn-panel { position: absolute; right: max(10px, 6vw); top: 50%; translate: 0 -50%; z-index: 12; display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #c7cdea; border-radius: 13px; background: linear-gradient(145deg, #fff, var(--cream)); color: var(--ink); box-shadow: 0 6px 0 rgba(35,39,90,.2), 0 18px 34px rgba(24,27,76,.22); }.drawn-panel > span { writing-mode: vertical-rl; color: var(--muted); font-size: 8px; font-weight: 760; letter-spacing: .11em; }.drawn-panel .playing-card { width: 62px; flex: 0 0 auto; }.drawn-actions { width: 116px; display: grid; gap: 7px; }.drawn-actions small { color: var(--muted); font-size: 9px; line-height: 1.35; }.swap-slot-cue { display: flex; align-items: center; gap: 4px; }.swap-slot-cue .game-glyph { width: 13px; height: 13px; flex: 0 0 auto; color: var(--blue); }.discard-drawn { width: 100%; min-height: 46px; padding: 8px; }
 .drawn-panel.receiving-draw .playing-card { animation: drawDestinationArrive var(--table-flight-duration, .72s) linear both; }
 .drawn-panel.receiving-draw > span, .drawn-panel.receiving-draw .drawn-actions { animation: drawnControlsArrive var(--table-flight-duration, .72s) ease-out both; }
+.opponent-decision-stage { width: 54px; position: fixed; z-index: 34; translate: -50% 0; display: grid; justify-items: center; pointer-events: none; filter: drop-shadow(0 12px 18px rgba(18,20,57,.25)); }
+.opponent-decision-stage::before { content: ""; height: 8px; position: absolute; left: 50%; top: -8px; border-left: 1px dashed rgba(164,239,214,.72); }
+.decision-card-anchor { width: 54px; aspect-ratio: 2.5 / 3.5; display: block; position: relative; }
+.decision-card-anchor .playing-card { width: 100%; height: 100%; }
+.decision-card-anchor .card-surface { box-shadow: 0 4px 0 rgba(35,29,70,.24), 0 10px 20px rgba(19,22,65,.3), 0 0 0 4px rgba(140,229,199,.15); }
+.decision-owner { min-width: max-content; position: absolute; left: 50%; top: calc(100% + 5px); translate: -50% 0; display: flex; align-items: center; gap: 5px; padding: 3px 6px; border: 1px solid rgba(164,239,214,.48); border-radius: 999px; background: rgba(23,25,61,.93); color: #fff; box-shadow: 0 4px 10px rgba(15,18,54,.22); line-height: 1; }
+.opponent-decision-stage.label-left .decision-owner { left: auto; right: calc(100% + 6px); top: 50%; translate: 0 -50%; }.opponent-decision-stage.label-right .decision-owner { left: calc(100% + 6px); top: 50%; translate: 0 -50%; }
+.decision-owner strong { max-width: 84px; overflow: hidden; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }.decision-owner small { color: #9ce9cf; font-size: 5px; font-weight: 850; letter-spacing: .1em; }
+.opponent-decision-stage.receiving-draw .decision-card-anchor { animation: drawDestinationArrive var(--table-flight-duration, .72s) linear both; }
+.opponent-decision-stage.receiving-draw .decision-owner { animation: decisionLabelArrive var(--table-flight-duration, .72s) ease-out both; }
+.opponent-decision-stage.departing-draw .decision-card-anchor { opacity: 0; }
+.opponent-decision-stage.departing-draw .decision-owner { border-color: rgba(164,239,214,.7); }
 .stack-hint { position: absolute; left: 50%; bottom: 4px; translate: -50%; display: flex; gap: 7px; align-items: center; padding: 7px 10px; border: 1px solid rgba(232,235,255,.34); border-radius: 999px; background: rgba(25,27,65,.9); color: var(--cream); box-shadow: 0 6px 18px rgba(19,21,61,.16), inset 0 1px rgba(255,255,255,.06); white-space: nowrap; }.stack-hint strong { color: #83e3c3; font-size: 8px; letter-spacing: .11em; }.stack-hint span { font-size: 9px; }.stack-hint.limit strong { color: #ffabb1; }
 
 .self-zone { display: grid; justify-items: center; align-self: end; position: relative; z-index: 6; }.self-zone .seat-name { display: none; }.you-label { margin-top: 6px; padding: 2px 6px; border-radius: 99px; color: #edf0ff; font-size: 8px; font-weight: 760; letter-spacing: .12em; }.self-zone:has(.active-turn) .you-label { background: rgba(24,61,69,.5); color: #aaf0d9; box-shadow: 0 0 0 1px rgba(140,229,199,.3), 0 5px 14px rgba(18,20,57,.13); }
@@ -389,6 +401,7 @@ input:focus { border-color: #7d77dc; box-shadow: 0 0 0 4px rgba(92,86,200,.09); 
 @keyframes discardDestinationArrive { 0%, 87% { opacity: 0; transform: translateY(-5px) rotate(1.5deg) scale(1.025); } 100% { opacity: 1; transform: translateY(0) rotate(0) scale(1); } }
 @keyframes drawDestinationArrive { 0%, 88% { opacity: 0; } 100% { opacity: 1; } }
 @keyframes drawnControlsArrive { 0%, 72% { opacity: 0; transform: translateY(3px); } 100% { opacity: 1; transform: translateY(0); } }
+@keyframes decisionLabelArrive { 0%, 68% { opacity: 0; transform: translateY(-3px); } 100% { opacity: 1; transform: translateY(0); } }
 @keyframes cambioStatus { from { opacity: 0; transform: translateY(-7px) scale(.82); letter-spacing: .2em; } to { opacity: 1; transform: translateY(0) scale(1); letter-spacing: .12em; } }
 @keyframes spin { to { rotate: 360deg; } }
 @keyframes cardStackMiss { 0%,100% { transform: translateX(0) rotate(0); } 18% { transform: translateX(-7px) rotate(-1.4deg); } 36% { transform: translateX(7px) rotate(1.4deg); } 56% { transform: translateX(-5px) rotate(-.8deg); } 76% { transform: translateX(5px) rotate(.8deg); } }
@@ -417,6 +430,7 @@ input:focus { border-color: #7d77dc; box-shadow: 0 0 0 4px rgba(92,86,200,.09); 
   .opponent-rail:has(.player-hand:nth-child(5)) .target-cue { display: none; }
   .table-center { min-height: 180px; }.pile-zone { gap: 23px; }.pile .playing-card, .deck-card { width: 65px; }.pile > span { font-size: 7px; }.deck-card small { right: -5px; top: -6px; }
   .drawn-flight-anchor { width: 54px; left: calc(50% - 84px); right: auto; top: auto; bottom: 31px; translate: 0; }.drawn-panel { left: 50%; right: auto; top: auto; bottom: 24px; translate: -50% 0; gap: 7px; padding: 7px; border-radius: 9px; }.drawn-panel > span { display: none; }.drawn-panel .playing-card { width: 54px; }.drawn-actions { width: 106px; }.drawn-actions small { font-size: 8px; }.discard-drawn { min-height: 43px; padding: 6px; font-size: 10px; }
+  .opponent-decision-stage, .decision-card-anchor { width: 42px; }.decision-owner { top: calc(100% + 4px); gap: 3px; padding: 3px 5px; }.decision-owner strong { max-width: 60px; font-size: 6px; }.decision-owner small { font-size: 4.5px; }
   .stack-hint { bottom: 1px; padding: 5px 8px; }.stack-hint span { font-size: 8px; }
   .you-label { margin-top: 4px; }.game-actions { right: max(6px, env(safe-area-inset-right)); bottom: max(7px, env(safe-area-inset-bottom)); }.cambio-button { min-height: 43px; max-width: 90px; padding: 7px 9px; font-size: 8px; }
   .game-page:has(.self-zone .hand-slot:nth-child(5)) .self-zone { translate: -34px 0; }
@@ -431,6 +445,7 @@ input:focus { border-color: #7d77dc; box-shadow: 0 0 0 4px rgba(92,86,200,.09); 
 }
 
 @media (max-height: 680px) and (max-width: 760px) {
+  .opponent-decision-stage, .decision-card-anchor { width: 36px; }
   .landing { padding-top: 28px; }.landing .hero-tableau { display: none; }.landing .feature-row { margin-top: 20px; }
   .waiting-page { height: calc(100dvh - 58px); min-height: 0; padding-block: 8px; overflow: hidden; }
   .waiting-card { max-height: 100%; padding: 15px 18px; border-radius: 15px; }
@@ -462,6 +477,7 @@ input:focus { border-color: #7d77dc; box-shadow: 0 0 0 4px rgba(92,86,200,.09); 
 
 /* Wide phones in landscape still need all seven opponents in fixed memory positions. */
 @media (max-height: 500px) and (min-width: 761px) {
+  .opponent-decision-stage, .decision-card-anchor { width: 42px; }.decision-owner { gap: 3px; padding: 3px 5px; }.decision-owner strong { max-width: 62px; font-size: 6px; }.decision-owner small { font-size: 4.5px; }
   .waiting-page { width: min(100% - 32px, 900px); height: calc(100dvh - 64px); min-height: 0; padding-block: 12px; overflow: hidden; }
   .waiting-card { width: 100%; height: 100%; grid-template-columns: 82px minmax(250px, 1fr) minmax(250px, .8fr); grid-template-rows: auto auto 1fr auto; justify-items: start; align-items: center; column-gap: 24px; padding: 20px 28px; text-align: left; }
   .waiting-orbit { grid-column: 1; grid-row: 1 / -1; align-self: center; margin: 0; }

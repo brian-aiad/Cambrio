@@ -12,7 +12,7 @@ export function VisualAuditApp() {
   const query = new URLSearchParams(window.location.search);
   const scene = query.get('scene') ?? 'awaiting';
   const playerCount = Math.min(8, Math.max(2, Number(query.get('players') ?? 4)));
-  const activeIndex = Math.min(playerCount - 1, Math.max(0, Number(query.get('active') ?? (scene === 'opponent-turn' || scene === 'paused' || scene === 'initial-paused' ? 1 : 0))));
+  const activeIndex = Math.min(playerCount - 1, Math.max(0, Number(query.get('active') ?? (scene === 'opponent-turn' || scene === 'opponent-drawn' || scene === 'paused' || scene === 'initial-paused' ? 1 : 0))));
   const [room, setRoom] = useState(() => makeRoom(scene, playerCount, activeIndex));
   if (scene === 'cards') return <CardGallery />;
   const send = async (action: { type: string; targetCardId?: string; swap?: boolean }): Promise<ActionAck> => {
@@ -62,6 +62,11 @@ function makeRoom(scene: string, playerCount: number, activeIndex: number): Room
     game.stackOpen = false;
     game.turnStage = 'deciding';
     game.drawnCard = faceCard('drawn-10', -1, '10', 'hearts');
+  }
+  if (scene === 'opponent-drawn') {
+    game.stackOpen = false;
+    game.turnStage = 'deciding';
+    game.deckCount = 37;
   }
   const power = powerForScene(scene, players);
   if (power) {
@@ -194,6 +199,7 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
       }
       const slot = Math.max(3, ...self.cards.map((card) => card.slot)) + 1;
       self.cards.push({ id: `penalty-${slot}`, slot });
+      game.deckCount = Math.max(0, game.deckCount - 1);
       game.version += 1;
       return { room: next, outcome: 'penalty' };
     }

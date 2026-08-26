@@ -83,3 +83,16 @@ test('reduced-motion preference removes travel animation without delaying the de
   await expect(page.locator('.drawn-actions')).toHaveCSS('opacity', '1');
   await expect(page.getByRole('button', { name: /^discard$/i })).toBeEnabled();
 });
+
+test('a wrong stack visibly deals its penalty from the deck to the exact stable slot', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__visual-audit?scene=stack-wrong&players=8');
+  await page.locator('.self-zone [data-card-id="p0-card-0"]').click();
+  const flight = page.locator('.card-flight');
+  await expect(flight).toHaveCount(1);
+  await expect(flight).toHaveAttribute('data-flight-from', 'Deck');
+  await expect(flight).toHaveAttribute('data-flight-to', 'Brian +1');
+  await expect(page.locator('[role="status"].sr-only')).toContainText('Brian received a penalty card');
+  await expect(page.locator('.self-zone .hand-slot')).toHaveCount(5);
+  await expect(page.locator('.swap-flight-layer')).toHaveCount(0, { timeout: 1_500 });
+});

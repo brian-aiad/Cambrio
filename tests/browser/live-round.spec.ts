@@ -158,3 +158,58 @@ test('eight seats and a ninth-browser queue fit compact phones and deal without 
     await Promise.all(browsers.map(({ context }) => context.close()));
   }
 });
+
+test('spectators see opponent draws staged at that player before discard or replacement', async ({ browser }) => {
+  test.setTimeout(45_000);
+  for (const decision of ['discard', 'replace'] as const) {
+    const north = await isolatedPage(browser);
+    const south = await isolatedPage(browser);
+    try {
+      await north.page.goto('/');
+      await enterName(north.page, 'North');
+      await north.page.getByRole('button', { name: /create private room/i }).click();
+      await expect(north.page).toHaveURL(/\/room\/[A-HJ-NP-Z2-9]{8}$/);
+      const code = north.page.url().split('/').at(-1)!;
+      await south.page.goto(`/room/${code}`);
+      await enterName(south.page, 'South');
+      await south.page.getByRole('button', { name: /join room/i }).click();
+      await south.page.getByRole('button', { name: /ready up/i }).click();
+      await north.page.getByRole('button', { name: /deal the cards/i }).click();
+      await Promise.all([completeInitialPeek(north.page), completeInitialPeek(south.page)]);
+
+      const northActs = await north.page.locator('.turn-banner.your-turn').isVisible();
+      const actor = northActs ? north.page : south.page;
+      const observer = northActs ? south.page : north.page;
+      const actorName = northActs ? 'North' : 'South';
+      await actor.locator('.deck-card').click();
+      const drawFlight = observer.locator('.card-flight');
+      await expect(drawFlight).toHaveAttribute('data-flight-from', 'Deck');
+      await expect(drawFlight).toHaveAttribute('data-flight-to', `${actorName}'s draw`);
+      await expect(observer.locator('.decision-owner')).toContainText(actorName);
+      await expect(observer.locator('.decision-owner')).toContainText(/drawing|choosing/i);
+      await expect(observer.locator('.swap-flight-layer')).toHaveCount(0, { timeout: 1_500 });
+      await expect(observer.locator('.opponent-decision-stage')).toBeVisible();
+      await expect(observer.locator('.decision-owner')).toContainText('CHOOSING');
+
+      if (decision === 'discard') {
+        await actor.getByRole('button', { name: /^discard$/i }).click();
+        await expect(observer.locator('.card-flight')).toHaveAttribute('data-flight-from', `${actorName}'s draw`);
+        await expect(observer.locator('.card-flight')).toHaveAttribute('data-flight-to', 'Discard');
+        await expect(observer.locator('.decision-owner')).toContainText('DISCARDING');
+      } else {
+        await actor.locator('.self-zone .playing-card').first().click();
+        const flights = observer.locator('.card-flight');
+        await expect(flights).toHaveCount(2);
+        await expect(flights.nth(0)).toHaveAttribute('data-flight-from', `${actorName} TL`);
+        await expect(flights.nth(0)).toHaveAttribute('data-flight-to', 'Discard');
+        await expect(flights.nth(1)).toHaveAttribute('data-flight-from', `${actorName}'s draw`);
+        await expect(flights.nth(1)).toHaveAttribute('data-flight-to', `${actorName} TL`);
+        await expect(observer.locator('.decision-owner')).toContainText('SWAPPING');
+      }
+      await expect(observer.locator('.swap-flight-layer')).toHaveCount(0, { timeout: 2_000 });
+      await expect(observer.locator('.opponent-decision-stage')).toHaveCount(0, { timeout: 2_000 });
+    } finally {
+      await Promise.all([north.context.close(), south.context.close()]);
+    }
+  }
+});
