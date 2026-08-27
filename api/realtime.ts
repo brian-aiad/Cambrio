@@ -5,6 +5,7 @@ import { GameRuleError } from '../src/shared/game.js';
 import {
   gameActionSchema,
   roomActionSchema,
+  roomSignalChannel,
   type ActionAck,
   type GameAction,
   type RoomAction,
@@ -71,21 +72,30 @@ async function synchronize(identity: ServerIdentity, membership?: Membership, pr
   const room = await manager.get(membership.roomCode);
   if (!room || !ownsSeat(room, membership, identity)) return { connected: true, left: membershipLoss(room, membership) };
   if (presence || nextDeadline(room) <= Date.now()) {
-    return withRoomLock(membership.roomCode, async () => {
+    const synchronized = await withRoomLock(membership.roomCode, async () => {
       const lockedManager = new RoomManager(createPersistence());
       let lockedRoom = await lockedManager.get(membership.roomCode);
-      if (!lockedRoom || !ownsSeat(lockedRoom, membership, identity)) return { connected: true, left: membershipLoss(lockedRoom, membership) };
+      if (!lockedRoom || !ownsSeat(lockedRoom, membership, identity)) {
+        return { response: { connected: true, left: membershipLoss(lockedRoom, membership) } satisfies RealtimeResponse };
+      }
       if (presence) {
         const now = Date.now();
         await lockedManager.heartbeat(membership.roomCode, membership.playerId, now, PRESENCE_STALE_MS);
         lockedRoom = (await lockedManager.get(membership.roomCode))!;
       }
-      await lockedManager.tick(Date.now());
+      const changed = await lockedManager.tick(Date.now());
       const current = await lockedManager.get(membership.roomCode);
-      return current && ownsSeat(current, membership, identity)
-        ? { connected: true, membership, state: lockedManager.view(current, membership.playerId) }
-        : { connected: true, left: membershipLoss(current, membership) };
+      return {
+        response: current && ownsSeat(current, membership, identity)
+          ? { connected: true, membership, state: lockedManager.view(current, membership.playerId) } satisfies RealtimeResponse
+          : { connected: true, left: membershipLoss(current, membership) } satisfies RealtimeResponse,
+        signal: current && changed.includes(membership.roomCode)
+          ? { code: membership.roomCode, revision: current.checkpointVersion }
+          : undefined,
+      };
     });
+    if (synchronized.signal) await broadcastRoomChange(synchronized.signal.code, synchronized.signal.revision);
+    return synchronized.response;
   }
   return { connected: true, membership, state: manager.view(room, membership.playerId) };
 }
@@ -96,12 +106,12 @@ async function performAction(identity: ServerIdentity, body: Extract<RealtimeReq
   const code = actionCode(action, body.membership);
   const lockKey = code ?? `create:${identity.userId}`;
 
-  return withRoomLock(lockKey, async () => {
+  const completed = await withRoomLock(lockKey, async () => {
     const manager = new RoomManager(createPersistence());
     if (code) {
       const room = await manager.get(code);
       if (body.membership && (!room || !ownsSeat(room, body.membership, identity))) {
-        return { connected: true, ack: { clientActionId: action.clientActionId, ok: false, code: 'NOT_IN_ROOM', message: 'Rejoin this room before acting.' } };
+        return { response: { connected: true, ack: { clientActionId: action.clientActionId, ok: false, code: 'NOT_IN_ROOM', message: 'Rejoin this room before acting.' } } satisfies RealtimeResponse };
       }
       if (body.membership) await manager.heartbeat(body.membership.roomCode, body.membership.playerId, Date.now(), PRESENCE_STALE_MS);
     }
@@ -112,22 +122,42 @@ async function performAction(identity: ServerIdentity, body: Extract<RealtimeReq
     const membership = result.membership;
     const notices = resultNotices(result.message, result.effects);
     if (!membership) {
-      return { connected: true, ack: { clientActionId: action.clientActionId, ok: true }, notices, left: body.membership ? { message: 'You left the table.' } : undefined };
+      const room = code ? await manager.get(code) : undefined;
+      return {
+        response: { connected: true, ack: { clientActionId: action.clientActionId, ok: true }, notices, left: body.membership ? { message: 'You left the table.' } : undefined } satisfies RealtimeResponse,
+        signal: code && room ? { code, revision: room.checkpointVersion, actorPlayerId: body.membership?.playerId } : undefined,
+      };
     }
     await manager.heartbeat(membership.roomCode, membership.playerId, Date.now(), PRESENCE_STALE_MS);
     const room = await manager.get(membership.roomCode);
     return {
-      connected: true,
-      ack: {
-        clientActionId: action.clientActionId,
-        ok: true,
-        outcome: result.effects?.find((effect) => effect.type === 'stack' || effect.type === 'penalty' || effect.type === 'stack_lock')?.type,
+      response: {
+        connected: true,
+        ack: {
+          clientActionId: action.clientActionId,
+          ok: true,
+          outcome: result.effects?.find((effect) => effect.type === 'stack' || effect.type === 'penalty' || effect.type === 'stack_lock')?.type,
+        },
+        membership,
+        state: room ? manager.view(room, membership.playerId) : undefined,
+        notices,
       },
-      membership,
-      state: room ? manager.view(room, membership.playerId) : undefined,
-      notices,
+      signal: room ? { code: membership.roomCode, revision: room.checkpointVersion, actorPlayerId: membership.playerId } : undefined,
     };
   });
+  if (completed.signal) await broadcastRoomChange(completed.signal.code, completed.signal.revision, completed.signal.actorPlayerId);
+  return completed.response;
+}
+
+async function broadcastRoomChange(code: string, revision: number, actorPlayerId?: string): Promise<void> {
+  if (!redis) return;
+  try {
+    await redis.publish(roomSignalChannel(code), JSON.stringify({ revision, actorPlayerId }));
+  } catch (error) {
+    // Polling remains the correctness path when this low-latency wake-up is
+    // unavailable, so a signal outage must never reject an accepted move.
+    console.warn('Realtime room signal failed; clients will use polling.', error instanceof Error ? error.message : error);
+  }
 }
 
 async function withRoomLock<T>(code: string, operation: () => Promise<T>): Promise<T> {

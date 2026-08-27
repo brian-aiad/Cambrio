@@ -13,9 +13,11 @@ export function VisualAuditApp() {
   const scene = query.get('scene') ?? 'awaiting';
   const playerCount = Math.min(8, Math.max(2, Number(query.get('players') ?? 4)));
   const activeIndex = Math.min(playerCount - 1, Math.max(0, Number(query.get('active') ?? (scene === 'opponent-turn' || scene === 'opponent-drawn' || scene === 'paused' || scene === 'initial-paused' ? 1 : 0))));
+  const simulatedLatency = Math.min(2_000, Math.max(0, Number(query.get('latency') ?? 0)));
   const [room, setRoom] = useState(() => makeRoom(scene, playerCount, activeIndex));
   if (scene === 'cards') return <CardGallery />;
   const send = async (action: { type: string; targetCardId?: string; swap?: boolean }): Promise<ActionAck> => {
+    if (simulatedLatency) await new Promise((resolve) => window.setTimeout(resolve, simulatedLatency));
     let outcome: ActionAck['outcome'];
     setRoom((current) => {
       const result = applyAuditAction(current, action, scene);
@@ -98,6 +100,7 @@ function makeRoom(scene: string, playerCount: number, activeIndex: number): Room
 
   return {
     code: 'PLAY2458',
+    revision: game.version,
     phase: isResults ? 'results' : 'game',
     selfPlayerId: self.id,
     hostPlayerId: self.id,
@@ -195,12 +198,14 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
       if (self.cards.length >= 6) {
         game.stackLocked = true;
         game.version += 1;
+        next.revision = game.version;
         return { room: next, outcome: 'stack_lock' };
       }
       const slot = Math.max(3, ...self.cards.map((card) => card.slot)) + 1;
       self.cards.push({ id: `penalty-${slot}`, slot });
       game.deckCount = Math.max(0, game.deckCount - 1);
       game.version += 1;
+      next.revision = game.version;
       return { room: next, outcome: 'penalty' };
     }
     const owner = game.players.find((player) => player.cards.some((card) => card.id === action.targetCardId));
@@ -213,9 +218,11 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
       if (owner.id !== self.id) game.transfer = { fromPlayerId: self.id, toPlayerId: owner.id, deadlineAt: Date.now() + 38_000 };
     }
     game.version += 1;
+    next.revision = game.version;
     return { room: next, outcome: 'stack' };
   }
   game.version += 1;
+  next.revision = game.version;
   return { room: next };
 }
 

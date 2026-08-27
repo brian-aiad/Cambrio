@@ -47,11 +47,21 @@ class HttpRealtimeTransport implements ClientTransport {
   private failures = 0;
   private nextPollMilliseconds = 900;
   private lastPresenceAt = 0;
+  private lastRevision = -1;
+  private lastStateFingerprint = '';
+  private pollRequested = false;
+  private signalRoomCode?: string;
+  private signalController?: AbortController;
+  private signalRetryTimer?: number;
+  private signalGeneration = 0;
   private readonly endpoint: string;
+  private readonly signalEndpoint: string;
 
   constructor(serverUrl: string, private session: ClientSession) {
     this.endpoint = new URL('/api/realtime', serverUrl).toString();
+    this.signalEndpoint = new URL('/api/signal', serverUrl).toString();
     this.membership = this.restoreMembership();
+    if (this.membership) this.followRoom(this.membership.roomCode);
     document.addEventListener('visibilitychange', this.wakeWhenVisible);
     window.addEventListener('online', this.wakeWhenVisible);
     window.addEventListener('pageshow', this.wakeWhenVisible);
@@ -75,6 +85,11 @@ class HttpRealtimeTransport implements ClientTransport {
     document.removeEventListener('visibilitychange', this.wakeWhenVisible);
     window.removeEventListener('online', this.wakeWhenVisible);
     window.removeEventListener('pageshow', this.wakeWhenVisible);
+    this.signalGeneration += 1;
+    this.signalController?.abort();
+    window.clearTimeout(this.signalRetryTimer);
+    this.signalController = undefined;
+    this.signalRoomCode = undefined;
     this.setConnected(false);
   }
 
@@ -95,7 +110,11 @@ class HttpRealtimeTransport implements ClientTransport {
   }
 
   private async poll() {
-    if (!this.active || this.polling) return;
+    if (!this.active) return;
+    if (this.polling) {
+      this.pollRequested = true;
+      return;
+    }
     this.polling = true;
     try {
       if (this.membership) {
@@ -112,16 +131,29 @@ class HttpRealtimeTransport implements ClientTransport {
       if (this.failures === 2) this.emitLocal('connect_error', error instanceof Error ? error : new Error('Realtime connection lost.'));
     } finally {
       this.polling = false;
-      if (this.active) this.pollTimer = window.setTimeout(() => void this.poll(), document.hidden ? 2_000 : this.nextPollMilliseconds);
+      if (this.active) {
+        if (this.pollRequested && !document.hidden) {
+          this.pollRequested = false;
+          queueMicrotask(() => void this.poll());
+        } else {
+          this.pollTimer = window.setTimeout(() => void this.poll(), document.hidden ? 2_000 : this.nextPollMilliseconds);
+        }
+      }
     }
   }
 
   private wakeWhenVisible = () => {
     if (!this.active || document.hidden) return;
+    this.requestImmediatePoll();
+  };
+
+  private requestImmediatePoll() {
+    if (!this.active || document.hidden) return;
     window.clearTimeout(this.pollTimer);
     this.pollTimer = undefined;
-    void this.poll();
-  };
+    if (this.polling) this.pollRequested = true;
+    else void this.poll();
+  }
 
   private async request(body: unknown, milliseconds: number): Promise<HttpResponse> {
     const controller = new AbortController();
@@ -149,16 +181,91 @@ class HttpRealtimeTransport implements ClientTransport {
     if (response.membership) {
       this.membership = response.membership;
       sessionStorage.setItem('cambrio:http-membership', JSON.stringify(response.membership));
+      this.followRoom(response.membership.roomCode);
     }
     if (response.state) {
       this.nextPollMilliseconds = response.state.game?.paused ? 900 : response.state.game?.stackOpen ? 250 : response.state.phase === 'lobby' ? 900 : 650;
-      this.emitLocal('room:state', response.state);
+      const revision = Number.isFinite(response.state.revision) ? response.state.revision : undefined;
+      // Polls and actions are intentionally concurrent. A slow poll must never
+      // overwrite a newer action response and make the table jump backward.
+      if (acceptRoomRevision(this.lastRevision, revision)) {
+        const fingerprint = roomViewFingerprint(response.state);
+        this.lastRevision = revision ?? this.lastRevision;
+        if (fingerprint !== this.lastStateFingerprint) {
+          this.lastStateFingerprint = fingerprint;
+          this.emitLocal('room:state', response.state);
+        }
+      }
     }
     for (const notice of response.notices ?? []) this.emitLocal('notice', notice);
     if (response.left) {
       this.membership = undefined;
       sessionStorage.removeItem('cambrio:http-membership');
+      this.followRoom(undefined);
       this.emitLocal('room:left', response.left);
+    }
+  }
+
+  private followRoom(roomCode?: string) {
+    if (roomCode === this.signalRoomCode && this.signalController) return;
+    const generation = ++this.signalGeneration;
+    this.signalController?.abort();
+    window.clearTimeout(this.signalRetryTimer);
+    this.signalController = undefined;
+    this.signalRoomCode = roomCode;
+    if (roomCode && this.active) void this.openSignalStream(roomCode, generation);
+  }
+
+  private async openSignalStream(roomCode: string, generation: number) {
+    if (!this.membership || !this.active || generation !== this.signalGeneration) return;
+    const controller = new AbortController();
+    this.signalController = controller;
+    try {
+      const response = await fetch(this.signalEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-visitor-id': this.session.visitorId,
+          ...(this.session.token ? { Authorization: `Bearer ${this.session.token}` } : {}),
+        },
+        body: JSON.stringify({ membership: this.membership }),
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) throw new Error('The live update stream is unavailable.');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+      while (this.active && generation === this.signalGeneration) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+        const lines = buffered.split(/\r?\n/);
+        buffered = lines.pop() ?? '';
+        for (const line of lines) {
+          if (line.startsWith('data:')) this.consumeSignalFrame(line.slice(5).trim());
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted && this.active) console.debug('Live update stream reconnecting.', error);
+    } finally {
+      if (this.signalController === controller) this.signalController = undefined;
+      if (!controller.signal.aborted && this.active && generation === this.signalGeneration && roomCode === this.signalRoomCode) {
+        this.signalRetryTimer = window.setTimeout(() => void this.openSignalStream(roomCode, generation), 1_000);
+      }
+    }
+  }
+
+  private consumeSignalFrame(rawFrame: string) {
+    try {
+      const frame = parseSignalFrame(rawFrame);
+      if (!frame || frame[0] !== 'message') return;
+      const signal = typeof frame[2] === 'string' ? JSON.parse(frame[2]) as { revision?: unknown; actorPlayerId?: unknown } : frame[2] as { revision?: unknown; actorPlayerId?: unknown } | undefined;
+      if (signal?.actorPlayerId === this.membership?.playerId) return;
+      if (typeof signal?.revision === 'number' && signal.revision <= this.lastRevision) return;
+      this.requestImmediatePoll();
+    } catch {
+      // Subscription acknowledgements and keep-alive frames carry no state.
     }
   }
 
@@ -186,4 +293,27 @@ class HttpRealtimeTransport implements ClientTransport {
   private emitLocal<Event extends TransportEvent>(event: Event, ...args: TransportEventMap[Event]) {
     for (const listener of this.listeners.get(event) ?? []) listener(...args);
   }
+}
+
+export function acceptRoomRevision(latestRevision: number, incomingRevision?: number): boolean {
+  return incomingRevision === undefined || incomingRevision >= latestRevision;
+}
+
+export function parseSignalFrame(rawFrame: string): unknown[] | undefined {
+  try {
+    const parsed = JSON.parse(rawFrame) as unknown;
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    const firstComma = rawFrame.indexOf(',');
+    const secondComma = rawFrame.indexOf(',', firstComma + 1);
+    if (firstComma <= 0 || secondComma <= firstComma) return undefined;
+    return [rawFrame.slice(0, firstComma), rawFrame.slice(firstComma + 1, secondComma), rawFrame.slice(secondComma + 1)];
+  }
+}
+
+export function roomViewFingerprint(state: RoomView): string {
+  const { revision: _revision, expiresAt: _expiresAt, ...visibleState } = state;
+  void _revision;
+  void _expiresAt;
+  return JSON.stringify(visibleState);
 }

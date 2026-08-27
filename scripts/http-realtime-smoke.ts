@@ -7,6 +7,7 @@ import type { Membership, RoomRuntime } from '../src/server/rooms.js';
 config({ path: '.env.preview.local', override: true, quiet: true });
 
 const { default: realtime } = await import('../api/realtime.ts');
+const { default: liveSignal } = await import('../api/signal.ts');
 const redisUrl = process.env.KV_REST_API_URL!;
 const redisToken = process.env.KV_REST_API_TOKEN!;
 if (!redisUrl || !redisToken) throw new Error('Pull the Vercel Preview environment before running this smoke test.');
@@ -81,10 +82,37 @@ async function sync(client: Client) {
 const created = await roomAction(clients[0], { type: 'ROOM_CREATE', name: 'Brian' });
 if (!created.ack?.ok || !created.membership) throw new Error(`Room creation failed: ${created.ack?.message}`);
 const code = created.membership.roomCode;
+const signalController = new AbortController();
 
 try {
+  const foreignSignal = await liveSignal.fetch(new Request('https://cambrio.vercel.app/api/signal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://example.invalid', 'x-visitor-id': clients[0].visitorId },
+    body: JSON.stringify({ membership: created.membership }),
+  }));
+  if (foreignSignal.status !== 403) throw new Error(`Cross-origin room signals were not rejected: ${foreignSignal.status}.`);
+  const stolenSignal = await liveSignal.fetch(new Request('https://cambrio.vercel.app/api/signal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-visitor-id': clients[1].visitorId },
+    body: JSON.stringify({ membership: created.membership }),
+  }));
+  if (stolenSignal.status !== 403) throw new Error(`A different visitor opened the host's room signal: ${stolenSignal.status}.`);
+  const signalResponse = await liveSignal.fetch(new Request('https://cambrio.vercel.app/api/signal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-visitor-id': clients[0].visitorId },
+    body: JSON.stringify({ membership: created.membership }),
+    signal: signalController.signal,
+  }));
+  if (!signalResponse.ok || !signalResponse.body) throw new Error(`The authenticated room signal stream returned ${signalResponse.status}.`);
+  const signalFrames = readSignalFrames(signalResponse.body);
+  await nextSignalFrame(signalFrames, (frame) => frame[0] === 'subscribe');
   const names = ['Brian', 'Alex', 'Maya', 'Jordan', 'Sam', 'Chris', 'Taylor', 'Devin'];
   await Promise.all(clients.slice(1).map((client, index) => roomAction(client, { type: 'ROOM_JOIN', code, name: names[index + 1] })));
+  const joinedSignal = await nextSignalFrame(signalFrames, (frame) => frame[0] === 'message');
+  const joinedPayload = JSON.parse(joinedSignal[2]) as { revision?: number };
+  if (typeof joinedPayload.revision !== 'number') throw new Error('The room signal omitted its authoritative revision.');
+  signalController.abort();
+  await signalFrames.return(undefined).catch(() => undefined);
   await Promise.all(clients.slice(1).map((client) => roomAction(client, { type: 'ROOM_READY', ready: true })));
   await sync(clients[0]);
   if (clients[0].state?.players.length !== 8) throw new Error('The serverless room did not serialize eight concurrent joins.');
@@ -143,13 +171,48 @@ try {
     concurrentJoins: 'serialized',
     rapidDeals: `${starts.length} requests / 1 round`,
     privateProjections: 'no leaked ranks, suits, or face IDs',
-    requestBoundaries: 'foreign origins, malformed JSON, and payloads over 32KB rejected',
+    requestBoundaries: 'foreign origins, stolen memberships, malformed JSON, and oversized payloads rejected',
     stackRace: '8 requests / 1 winner',
+    pushSignal: 'authenticated stream woke on a committed room revision',
     hostRemoval: 'removed player receives the exact reason',
     storage: 'Upstash free',
   }));
 } finally {
+  signalController.abort();
   await redis.del(`cambrio:room:${code}`);
+}
+
+async function* readSignalFrames(stream: ReadableStream<Uint8Array>): AsyncGenerator<string[]> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      buffered += decoder.decode(value, { stream: true });
+      const lines = buffered.split(/\r?\n/);
+      buffered = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const raw = line.slice(5).trim();
+        const firstComma = raw.indexOf(',');
+        const secondComma = raw.indexOf(',', firstComma + 1);
+        if (firstComma > 0 && secondComma > firstComma) yield [raw.slice(0, firstComma), raw.slice(firstComma + 1, secondComma), raw.slice(secondComma + 1)];
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+async function nextSignalFrame(frames: AsyncGenerator<string[]>, matches: (frame: string[]) => boolean): Promise<string[]> {
+  while (true) {
+    const { value, done } = await frames.next();
+    if (done) throw new Error('The room signal stream ended before the expected event.');
+    if (matches(value)) return value;
+  }
 }
 
 async function roomSnapshot(code: string): Promise<RoomRuntime> {

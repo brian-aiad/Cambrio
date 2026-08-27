@@ -29,6 +29,7 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 - Tap the deck to draw.
 - After a draw, tap **Discard** or tap one highlighted owned slot to replace it.
 - Other players never borrow the viewer's private draw panel. Their hidden draw travels from the deck to a named, face-down decision card physically attached to their seat. That card remains staged through **DRAWING → CHOOSING**, then becomes the exact source for **DISCARDING** or **SWAPPING**.
+- A local draw keeps its decision surface hidden through the card's landing frames, then reveals the card and controls together. A white empty panel must never flash underneath a card in flight.
 - During an open stack race, tap any remembered table card directly. There is no stack-mode button and no player-selection modal.
 - Power cards immediately mark only legal targets. A compact numbered action strip shows the completed and current step; the selected source stays visibly numbered on the physical card, so Jack/Queen and Black King never depend on a sentence to explain what happens next. Regular-height dense rails avoid repeated badges; the shortest swipe rail restores them because its larger targets can carry the step marker clearly.
 - Peeks reveal immediately after one legal card tap, remain visible for a short timed memory window, then conceal and complete automatically. Leaving or blurring the window conceals immediately.
@@ -36,6 +37,7 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 - The Black King decision is a distinct concealed server state: both ranks are removed from the browser projection before **Swap** or **Keep** appears.
 - Action hit areas never translate while awaiting input. The deck signals readiness with light and shadow only, so a fast touch, keyboard activation, and browser automation all acquire the same stable target.
 - A full mobile lobby becomes a two-column eight-seat grid with a visible capacity meter and an on-screen deal/ready control, including at 320×568. Join, ready, remove, draw, discard, target, and decision taps show a local pending state while waiting for the authoritative acknowledgement.
+- Discard and replacement acknowledgements use explicit **Discarding…** and **Swapping cards…** copy plus a restrained spinner; legal targets lock immediately so slow networks cannot look like a missed tap or accept a second decision.
 - Turn ownership uses coordinated copy, shape, and motion: the header names the player, their fixed hand receives a mint outline, the local label changes to **YOUR TURN**, the deck label changes from **DECK** to **DRAW**, and the 45-second clock uses a numeric progress ring. No single cue carries the meaning alone.
 
 ## Motion and feedback
@@ -49,6 +51,7 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 - Correct stack: selected card lifts/scales, travels to discard, success cue remains long enough to read.
 - Wrong stack: selected card shakes in place, penalty occupies the next stable slot, and an explicit penalty cue remains visible for 1.5 seconds.
 - Drawn cards enter from the deck side; prompt surfaces use short spring transitions without bounce-heavy staging.
+- Long card travel uses one compositor-friendly `translate3d / rotate / scale` transform rather than separately animated transform properties. Persistent readiness cues animate a non-interactive ring or pseudo-element, never the button or card hit target itself.
 - Reduced-motion users receive near-instant state changes with the same textual and color feedback.
 - Native vibration, when available, is brief and consistent: selection, success, and wrong-stack patterns are distinct. Visual feedback never depends on haptics.
 - When effects are enabled, local turn ownership adds a restrained two-note cue and short haptic pattern exactly once as control changes hands. Stage updates within the same turn stay silent.

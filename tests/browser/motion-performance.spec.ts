@@ -31,6 +31,27 @@ test('draw motion stays within a smooth mobile frame budget', async ({ page }) =
   await expect(page.locator('.drawn-actions')).toHaveCSS('opacity', '1');
 });
 
+test('draw landing never flashes an empty panel and decisions acknowledge immediately', async ({ page }) => {
+  await page.goto('/__visual-audit?scene=awaiting&players=2&latency=450');
+  await page.locator('.deck-card').click();
+  await expect(page.locator('.card-flight')).toHaveCount(1);
+  const earlyPanelOpacity = await page.locator('.drawn-panel').evaluate((element) => Number(window.getComputedStyle(element).opacity));
+  expect(earlyPanelOpacity).toBeLessThan(.08);
+  await expect(page.locator('.swap-flight-layer')).toHaveCount(0, { timeout: 2_000 });
+  await expect(page.locator('.drawn-actions')).toHaveCSS('opacity', '1');
+
+  await page.getByRole('button', { name: /^discard$/i }).click();
+  await expect(page.getByRole('button', { name: /discarding/i })).toBeVisible();
+  await expect(page.locator('.turn-banner')).toContainText('Sending discard…');
+  await expect(page.locator('.card-flight[data-flight-to="Discard"]')).toHaveCount(1);
+
+  await page.goto('/__visual-audit?scene=drawn&players=2&latency=450');
+  await page.locator('.self-zone .playing-card').first().click();
+  await expect(page.locator('.swap-slot-cue')).toContainText('Swapping cards…');
+  await expect(page.locator('.turn-banner')).toContainText('Swapping cards…');
+  await expect(page.locator('.card-flight')).toHaveCount(2);
+});
+
 test('long-distance swaps animate by transform and leave no transient layers', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   for (const viewport of [
@@ -51,13 +72,13 @@ test('long-distance swaps animate by transform and leave no transient layers', a
     const origins = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => ({
       left: (element as HTMLElement).style.left,
       top: (element as HTMLElement).style.top,
-      transform: (element as HTMLElement).style.transform,
+      transform: window.getComputedStyle(element).transform,
     })));
     await page.waitForTimeout(280);
     const moved = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => ({
       left: (element as HTMLElement).style.left,
       top: (element as HTMLElement).style.top,
-      transform: (element as HTMLElement).style.transform,
+      transform: window.getComputedStyle(element).transform,
       bounds: element.getBoundingClientRect().toJSON(),
     })));
     for (const [index, flight] of moved.entries()) {

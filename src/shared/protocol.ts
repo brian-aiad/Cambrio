@@ -21,6 +21,7 @@ export interface RoomPlayerView {
 
 export interface RoomView {
   code: string;
+  revision: number;
   phase: 'lobby' | 'game' | 'results';
   selfPlayerId: string;
   hostPlayerId: string;
@@ -85,6 +86,10 @@ export const gameActionSchema = z.discriminatedUnion('type', [
 
 export type RoomAction = z.infer<typeof roomActionSchema>;
 export type GameAction = z.infer<typeof gameActionSchema>;
+
+export function roomSignalChannel(roomCode: string): string {
+  return `cambrio:signal:${roomCode.toUpperCase()}`;
+}
 
 export function toGameCommand(action: GameAction, playerId: string): GameCommand {
   const { clientActionId: _, expectedVersion: __, ...command } = action;

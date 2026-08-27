@@ -20,23 +20,25 @@ The web client runs at `http://localhost:5173`; the realtime server runs at `htt
 npm run check
 npm run smoke:runtime
 npm run smoke:reconnect
+npm run smoke:signal
 npm run smoke:http
+npm run audit:hosted-sync
 npm run stress:socket
 npm run stress:actions
 ```
 
-`npm run check` runs linting, strict TypeScript checks, 79 deterministic rules and server tests, the one-player lobby gate, 350 randomized full games across every supported 2–8 player room size, an exhaustive 203-case caller/active-seat ending matrix, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run test:browser` runs 28 real-Chromium lifecycle, entry-form, rules-guide, viewport, turn-affordance, spectator-choreography, motion-budget, reduced-motion, and WCAG A/AA checks. `npm run check:release` runs both suites plus runtime, reconnect, hosted HTTP, action-race, and 96-client Socket.IO smokes. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass.
+`npm run check` runs linting, strict TypeScript checks, 82 deterministic rules, transport, and server tests, the one-player lobby gate, 350 randomized full games across every supported 2–8 player room size, an exhaustive 203-case caller/active-seat ending matrix, 1,000 competing stack races, 750 wrong-then-correct stack gambles, and a production build. `npm run test:browser` runs 29 real-Chromium lifecycle, entry-form, rules-guide, viewport, turn-affordance, spectator-choreography, motion-budget, pending-feedback, reduced-motion, and WCAG A/AA checks. `npm run check:release` runs both suites plus runtime, reconnect, authenticated SSE, hosted HTTP, action-race, and 96-client Socket.IO smokes. The Socket.IO load smoke opens 12 simultaneous eight-player rooms by default; set `CAMBRIO_LOAD_ROOMS=50` for the 400-client release stress pass. `npm run audit:hosted-sync` records two 390×844 browsers, Playwright traces, sampled frames, and six turns of actor/observer timing under `output/hosted-sync/`.
 
 ## Free production hosting
 
-The production site is deployed from `main` to `https://cambrio.vercel.app`. Vercel serves the React client and the `/api/realtime` serverless route; a free Upstash Redis database stores authoritative room checkpoints and serializes simultaneous moves.
+The production site is deployed from `main` to `https://cambrio.vercel.app`. Vercel serves the React client plus `/api/realtime` and `/api/signal`; a free Upstash Redis database stores authoritative room checkpoints, serializes simultaneous moves, and publishes private-state-free revision signals.
 
 1. Import this GitHub repository into a free Vercel project.
 2. Add `VITE_HTTP_TRANSPORT=true`, `KV_REST_API_URL`, and `KV_REST_API_TOKEN` to the Production environment. Keep the deployment on free plans with automatic paid upgrades disabled.
 3. Add the optional Supabase URL and keys only when accounts, persistent profiles, and match history are required. Guest rooms work without account setup.
 4. Push to `main`; Vercel builds and promotes the new deployment automatically.
 
-The hosted transport polls only the viewer-specific room projection. Periodic presence heartbeats pause an active round when a browser disappears and restore the same seat and remaining clock when it returns. Returning to a visible tab or regaining network access triggers an immediate resync. If someone cannot return, the host can forfeit that disconnected hand without abandoning the table; host departure transfers that control safely. Temporary card faces are revoked on disconnect and never restored from stale browser state.
+The hosted transport keeps viewer-specific projections authoritative through polling, then uses an authenticated Upstash SSE subscription to wake other seats immediately after a committed revision. Signals contain no cards or private game state, and polling remains the correctness fallback. Every room view carries a monotonic revision, so a slow older poll can never overwrite a newer action response and make the board jump backward. Periodic presence heartbeats pause an active round when a browser disappears and restore the same seat and remaining clock when it returns. Returning to a visible tab or regaining network access triggers an immediate resync. If someone cannot return, the host can forfeit that disconnected hand without abandoning the table; host departure transfers that control safely. Temporary card faces are revoked on disconnect and never restored from stale browser state.
 
 Expired invite links preserve and display the requested room code, explain what happened, and offer either a direct route home or a one-tap fresh table. Local development continues to use Socket.IO for faster feedback unless `VITE_HTTP_TRANSPORT=true` is set.
 

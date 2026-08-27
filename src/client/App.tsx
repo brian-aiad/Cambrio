@@ -346,6 +346,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
   const [tableCue, setTableCue] = useState<TableCue>();
   const [pendingGroups, setPendingGroups] = useState<string[]>([]);
   const [pendingCardId, setPendingCardId] = useState<string>();
+  const [pendingDecision, setPendingDecision] = useState<'discard' | 'swap'>();
   const reduceMotion = useReducedMotion();
   const feedbackTimer = useRef<number | undefined>(undefined);
   const cueTimer = useRef<number | undefined>(undefined);
@@ -361,12 +362,15 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
     pendingUiActions.current.add(group);
     setPendingGroups([...pendingUiActions.current]);
     if (cardId) setPendingCardId(cardId);
+    if (input.type === 'DISCARD_DRAWN') setPendingDecision('discard');
+    if (input.type === 'SWAP_DRAWN') setPendingDecision('swap');
     try {
       return await send(input);
     } finally {
       pendingUiActions.current.delete(group);
       setPendingGroups([...pendingUiActions.current]);
       if (cardId) setPendingCardId((current) => current === cardId ? undefined : current);
+      if (input.type === 'DISCARD_DRAWN' || input.type === 'SWAP_DRAWN') setPendingDecision(undefined);
     }
   }, [send]);
   useLayoutEffect(() => {
@@ -490,6 +494,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
   // Calling is intentionally table-wide: a player may call while another
   // player's turn is in progress, and that caller anchors the final rotation.
   const canCallCambrio = !game.ending && !paused;
+  const turnDecisionPending = pendingGroups.includes('turn-decision');
 
   const attemptStack = async (card: CardView) => {
     if (stackFeedback?.kind === 'trying') return;
@@ -508,6 +513,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
     if (game.stackOpen && canRiskStack) return void attemptStack(card);
   };
   const canInteract = (owner: PlayerView) => {
+    if (turnDecisionPending && canSwapDrawn) return false;
     if (transferring) return owner.id === self.id;
     if (selectingPower && power) return isEligiblePowerTarget(power.kind, power.targets.length, owner.id, self.id, self.cards.length);
     if (canSwapDrawn && owner.id === self.id) return true;
@@ -526,7 +532,6 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
     if (power.kind === 'own_peek' || power.kind === 'opponent_peek') return 'step-1';
     return power.targets.length === 0 ? 'step-1' : 'step-2';
   };
-  const turnDecisionPending = pendingGroups.includes('turn-decision');
   const powerPending = pendingGroups.includes('power');
   const cambioPending = pendingGroups.includes('CALL_CAMBIO');
   const selectionKind = power && (power.kind === 'own_peek' || power.kind === 'opponent_peek') ? 'peek' : power ? 'swap' : undefined;
@@ -540,7 +545,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
 
   return (
     <motion.main className={`game-page ${stackReady ? 'stack-mode' : ''} ${revealVisible ? 'reveal-focus-mode' : ''} ${paused ? 'is-paused' : ''} ${tableCue ? 'motion-locked' : ''}`} style={{ '--table-flight-duration': tableCue ? `${flightDuration(tableCue.kind)}s` : undefined } as CSSProperties} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <div className="game-status"><span className="room-pill" data-short={room.code.slice(0, 2)}>{room.code}</span><TurnBanner game={game} self={self} /><Countdown deadline={game.deadlineAt} pausedMs={game.paused?.remainingMs} /></div>
+      <div className="game-status"><span className="room-pill" data-short={room.code.slice(0, 2)}>{room.code}</span><TurnBanner game={game} self={self} pendingDecision={pendingDecision} /><Countdown deadline={game.deadlineAt} pausedMs={game.paused?.remainingMs} /></div>
       <section className="opponent-rail" aria-label="Other players" style={{ '--opponent-count': Math.max(1, opponents.length) } as CSSProperties}>
         {opponents.map((opponent) => <PlayerHand key={opponent.id} player={opponent} compact canInteract={() => canInteract(opponent)} highlight={() => isContextTarget(opponent)} targetCue={targetCue(opponent)} selectionKind={selectionKind} selectedCards={power?.targets} pendingCardId={pendingCardId} arrivingSlots={flightSlots(tableCue, opponent.id)} feedback={stackFeedback} reveal={revealVisible} onCard={(card) => actionCard(card, opponent)} active={game.activePlayerId === opponent.id} autoCenter={game.activePlayerId === opponent.id && !tableCue} />)}
       </section>
@@ -553,7 +558,7 @@ export function GameTable({ room, send, sendRoom }: { room: RoomView; send: (act
         </div>
         <span className="drawn-flight-anchor" data-table-zone="drawn" aria-hidden="true" />
         <AnimatePresence mode="wait" initial={false}>
-          {game.drawnCard ? <motion.div key="drawn" data-table-zone="drawn-card" className={`drawn-panel ${tableCue?.kind === 'draw' ? 'receiving-draw' : ''}`} initial={reduceMotion ? false : { opacity: 0, scale: .98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .98 }} transition={{ duration: reduceMotion ? 0 : .16, ease: [0.22, 1, 0.36, 1] }}><span>DRAWN</span><Card card={game.drawnCard} /><div className="drawn-actions"><button className={`primary discard-drawn ${turnDecisionPending ? 'is-pending' : ''}`} aria-busy={turnDecisionPending} disabled={turnDecisionPending} onClick={() => { vibrate(12); void performAction({ type: 'DISCARD_DRAWN' }); }}>{turnDecisionPending ? <span className="button-spinner" /> : <GameGlyph kind="discard" />}Discard</button>{self.cards.length > 0 && <small className="swap-slot-cue"><GameGlyph kind="swap" />Tap a marked slot to keep</small>}</div></motion.div> : stackReady ? <motion.div key="stack-open" className="stack-hint" initial={reduceMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .08 }}><GameGlyph kind="stack" /><strong>STACK OPEN</strong><span>Tap any remembered matching card</span></motion.div> : stackLocked ? <motion.div key="stack-locked" className="stack-hint limit" initial={reduceMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .08 }}><GameGlyph kind="stack" /><strong>STACK MISSED</strong><span>Try again on the next discard</span></motion.div> : null}
+          {game.drawnCard ? <motion.div key="drawn" data-table-zone="drawn-card" className={`drawn-panel ${tableCue?.kind === 'draw' ? 'receiving-draw' : ''} ${pendingDecision ? 'is-resolving' : ''}`} initial={reduceMotion ? false : { opacity: 0, scale: .98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .98 }} transition={{ duration: reduceMotion ? 0 : .16, ease: [0.22, 1, 0.36, 1] }}><span>DRAWN</span><Card card={game.drawnCard} /><div className="drawn-actions"><button className={`primary discard-drawn ${pendingDecision === 'discard' ? 'is-pending' : ''}`} aria-busy={pendingDecision === 'discard'} disabled={turnDecisionPending} onClick={() => { vibrate(12); void performAction({ type: 'DISCARD_DRAWN' }); }}>{pendingDecision === 'discard' ? <span className="button-spinner" /> : <GameGlyph kind="discard" />}{pendingDecision === 'discard' ? 'Discarding…' : 'Discard'}</button>{self.cards.length > 0 && <small className={`swap-slot-cue ${pendingDecision === 'swap' ? 'is-pending' : ''}`}>{pendingDecision === 'swap' ? <span className="button-spinner" /> : <GameGlyph kind="swap" />}{pendingDecision === 'swap' ? 'Swapping cards…' : 'Tap a marked slot to keep'}</small>}</div></motion.div> : stackReady ? <motion.div key="stack-open" className="stack-hint" initial={reduceMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .08 }}><GameGlyph kind="stack" /><strong>STACK OPEN</strong><span>Tap any remembered matching card</span></motion.div> : stackLocked ? <motion.div key="stack-locked" className="stack-hint limit" initial={reduceMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .08 }}><GameGlyph kind="stack" /><strong>STACK MISSED</strong><span>Try again on the next discard</span></motion.div> : null}
         </AnimatePresence>
       </section>
 
@@ -763,12 +768,15 @@ function SwapFlightLayer({ cue }: { cue: TableCue }) {
       const destinationScaleX = flight.to.width / flight.from.width;
       const destinationScaleY = flight.to.height / flight.from.height;
       const travelTimes = cue.kind === 'replace' ? index === 0 ? [0, .08, .42, .94, 1] : [0, .2, .58, .94, 1] : cue.kind === 'draw' ? [0, .06, .5, .94, 1] : [0, .1, .54, .91, 1];
+      const startRotate = index === 0 ? -2 : 2;
+      const middleRotate = index === 0 ? -7 : 7;
+      const transform = (x: number, y: number, rotate: number, scaleX: number, scaleY: number) => `translate3d(${x}px, ${y}px, 0) rotate(${rotate}deg) scale(${scaleX}, ${scaleY})`;
       return <motion.span key={flight.cardId} className={`card-flight flight-${index + 1} ${flight.faceDirection ? `face-${flight.faceDirection}` : ''}`} data-flight-card={flight.cardId}
         data-flight-from={flight.fromLabel} data-flight-to={flight.toLabel}
         data-flight-distance={Math.round(Math.hypot(flight.to.left - flight.from.left, flight.to.top - flight.from.top))}
         style={{ left: flight.from.left, top: flight.from.top, width: flight.from.width, height: flight.from.height, transformOrigin: 'top left' }}
-        initial={{ x: 0, y: 0, rotate: index === 0 ? -2 : 2, scaleX: 1, scaleY: 1, opacity: 1 }}
-        animate={{ x: [0, 0, middleX, deltaX, deltaX], y: [0, 0, middleY, deltaY, deltaY], rotate: index === 0 ? [-2, -2, -7, 0, 0] : [2, 2, 7, 0, 0], scaleX: [1, 1, Math.sqrt(destinationScaleX), destinationScaleX, destinationScaleX], scaleY: [1, 1, Math.sqrt(destinationScaleY), destinationScaleY, destinationScaleY], opacity: [1, 1, 1, 1, 0] }}
+        initial={{ transform: transform(0, 0, startRotate, 1, 1), opacity: 1 }}
+        animate={{ transform: [transform(0, 0, startRotate, 1, 1), transform(0, 0, startRotate, 1, 1), transform(middleX, middleY, middleRotate, Math.sqrt(destinationScaleX), Math.sqrt(destinationScaleY)), transform(deltaX, deltaY, 0, destinationScaleX, destinationScaleY), transform(deltaX, deltaY, 0, destinationScaleX, destinationScaleY)], opacity: [1, 1, 1, 1, 0] }}
         transition={{ duration, times: travelTimes, ease: [0.4, 0, 0.2, 1] }}><span className="flight-surface flight-back"><CardBackMark /></span>{flight.face?.rank && flight.face.suit && <span className={`flight-surface flight-front ${flight.face.suit === 'hearts' || flight.face.suit === 'diamonds' ? 'red' : ''}`}><strong>{flight.face.rank}</strong><SuitMark suit={flight.face.suit} /></span>}{flights.length > 1 && <b>{index + 1}</b>}</motion.span>;
     })}
   </motion.div>;
@@ -900,7 +908,7 @@ export function Card({ card, faceDown = false, interactive = false, mini = false
   </button>;
 }
 
-function TurnBanner({ game, self }: { game: GameView; self: PlayerView }) {
+function TurnBanner({ game, self, pendingDecision }: { game: GameView; self: PlayerView; pendingDecision?: 'discard' | 'swap' }) {
   const active = game.players.find((player) => player.id === game.activePlayerId);
   const endingPlayer = game.ending ? game.players.find((player) => player.id === game.ending!.triggerPlayerId) : undefined;
   const reduceMotion = useReducedMotion();
@@ -909,7 +917,7 @@ function TurnBanner({ game, self }: { game: GameView; self: PlayerView }) {
     return <div className="turn-banner paused" role="status" aria-live="polite"><strong>{disconnected.length === 1 ? `${disconnected[0].name} disconnected` : `${disconnected.length} players disconnected`}</strong><span>Game paused · seat saved</span></div>;
   }
   if (game.transfer) return <div className="turn-banner" role="status" aria-live="polite"><strong>Card transfer</strong><span>Finish the successful stack</span></div>;
-  return <div className={`turn-banner ${active?.id === self.id ? 'your-turn' : ''} ${game.ending ? 'ending-turn' : ''}`} role="status" aria-live="polite" aria-atomic="true">{game.ending && <span className="ending-state" role="status" aria-live="assertive"><CambrioGlyph decorative compact /><b>{game.ending.reason === 'cambio' ? 'CAMBRIO CALLED' : 'ZERO CARDS'}</b></span>}<motion.strong key={active?.id ?? 'none'} initial={reduceMotion ? false : { opacity: .62, y: -5, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: reduceMotion ? 0 : .28, ease: [0.22, 1, 0.36, 1] }}>{active?.id === self.id ? 'Your turn' : `${active?.name ?? 'Player'}'s turn`}</motion.strong><span>{game.ending ? `${endingPlayer?.name ?? 'Player'} · ${game.ending.turnsRemaining === 0 ? 'final turn' : `${game.ending.turnsRemaining} ${game.ending.turnsRemaining === 1 ? 'turn' : 'turns'} after this one`}` : game.turnStage === 'awaiting_draw' ? 'Draw from the deck' : game.turnStage === 'deciding' ? 'Discard or swap' : 'Resolving a power'}</span></div>;
+  return <div className={`turn-banner ${active?.id === self.id ? 'your-turn' : ''} ${game.ending ? 'ending-turn' : ''}`} role="status" aria-live="polite" aria-atomic="true">{game.ending && <span className="ending-state" role="status" aria-live="assertive"><CambrioGlyph decorative compact /><b>{game.ending.reason === 'cambio' ? 'CAMBRIO CALLED' : 'ZERO CARDS'}</b></span>}<motion.strong key={active?.id ?? 'none'} initial={reduceMotion ? false : { opacity: .62, y: -5, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: reduceMotion ? 0 : .28, ease: [0.22, 1, 0.36, 1] }}>{active?.id === self.id ? 'Your turn' : `${active?.name ?? 'Player'}'s turn`}</motion.strong><span>{pendingDecision === 'discard' ? 'Sending discard…' : pendingDecision === 'swap' ? 'Swapping cards…' : game.ending ? `${endingPlayer?.name ?? 'Player'} · ${game.ending.turnsRemaining === 0 ? 'final turn' : `${game.ending.turnsRemaining} ${game.ending.turnsRemaining === 1 ? 'turn' : 'turns'} after this one`}` : game.turnStage === 'awaiting_draw' ? 'Draw from the deck' : game.turnStage === 'deciding' ? 'Discard or swap' : 'Resolving a power'}</span></div>;
 }
 
 function Countdown({ deadline, pausedMs }: { deadline?: number; pausedMs?: number }) {

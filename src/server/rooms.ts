@@ -397,6 +397,7 @@ export class RoomManager {
     }
     return {
       code: room.code,
+      revision: room.checkpointVersion ?? room.game?.version ?? 0,
       phase: room.phase,
       selfPlayerId: playerId,
       hostPlayerId: room.hostPlayerId,

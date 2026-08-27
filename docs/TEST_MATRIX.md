@@ -28,6 +28,8 @@ This matrix records the release checks for the server-authoritative rules and th
 - Hard reload during initial peek revokes every temporary face; hard reload after drawing restores the exact pending card and accepts no duplicate draw.
 - Three live browsers verify simultaneous disconnects, partial recovery, host removal of the remaining offline seat, voluntary host departure, control transfer, and a correctly scored forfeit result.
 - Hosted request boundaries reject foreign browser origins, malformed JSON, and payloads larger than 32 KiB.
+- Authenticated Upstash publish/subscribe delivery wakes a seated browser on the committed room revision without exposing room state; foreign origins and stolen memberships cannot open the stream. Polling remains the tested fallback.
+- Monotonic client revision checks reject a late older poll after a newer action response, while revision-only heartbeats do not force duplicate visual renders.
 - Global game-version checks reject delayed turn/power decisions; discard-generation checks keep legitimate stack races concurrent.
 
 ## Eight-player layout audit
@@ -44,7 +46,9 @@ Seven opponent grids and the local grid were checked at these viewport sizes:
 
 The production landing page scores 100 for Accessibility, Best Practices, and SEO in the throttled Lighthouse mobile profile, with zero cumulative layout shift. Performance is 84 with 10 ms total blocking time; the remaining score cost is initial JavaScript transfer for realtime, auth, and motion support.
 
-The first-class Playwright harness checks 100 table-state/device combinations: the initial BL/BR hold-to-peek, every power phase, local and opponent draw decisions, stack decisions, transfer and ending states, tied/eight-player results, zero/six-card hands, every player count from 2–8, four viewport classes, and a gallery of all 52 card faces. Focused browser assertions additionally verify the compact first-screen entry action, automatic peek concealment, readable auto-following opponent rails that never scroll the document, unclipped six-card opponent targets, player-anchored hidden draw staging, unobstructed piles and local hands, named spectator discard/replacement paths, visibly dealt penalty cards, responsive long-distance eight-player exchanges, transform-only card travel, cleanup of transient animation layers, a mobile frame budget, immediate reduced-motion decisions, coordinated active-player/deck/timer cues, and keyboard focus restoration for the rules guide. The six representative game screens plus the open how-to-play guide must pass automated WCAG A/AA analysis with no violations.
+The first-class Playwright harness checks 100 table-state/device combinations: the initial BL/BR hold-to-peek, every power phase, local and opponent draw decisions, stack decisions, transfer and ending states, tied/eight-player results, zero/six-card hands, every player count from 2–8, four viewport classes, and a gallery of all 52 card faces. Focused browser assertions additionally verify the compact first-screen entry action, automatic peek concealment, readable auto-following opponent rails that never scroll the document, unclipped six-card opponent targets, player-anchored hidden draw staging, unobstructed piles and local hands, named spectator discard/replacement paths, visibly dealt penalty cards, responsive long-distance eight-player exchanges, transform-only card travel, cleanup of transient animation layers, a stable deck hit target, no empty draw-panel landing frame, immediate pending decision feedback, a mobile frame budget, immediate reduced-motion decisions, coordinated active-player/deck/timer cues, and keyboard focus restoration for the rules guide. The six representative game screens plus the open how-to-play guide must pass automated WCAG A/AA analysis with no violations.
+
+The hosted synchronization audit records two simultaneous 390×844 browser videos and screenshot-enabled Playwright traces, samples paired frames across the first draw/discard choreography, and measures six alternating turns. The observer must see the hidden card staged at the acting player's physical seat before that exact card travels to discard or a replacement slot; actor and observer frames must converge on the same public result without a stale-state reversal.
 
 The full-lobby browser audit creates eight isolated identities at both 320×568 and 390×844. It verifies two stable seat columns, all eight visible tiles, no horizontal overflow, an in-viewport deal control, and coalescing of three immediate deal taps into one initial-peek round. Power audits verify numbered source/destination markers, visual completed/current steps, two concealed Black King endpoints, and all 28 legal opponent-card targets in an eight-player blind swap without repeated dense-rail badges.
 
@@ -60,7 +64,9 @@ npm run test:browser
 npm run check:release
 npm run smoke:runtime
 npm run smoke:reconnect
+npm run smoke:signal
 npm run smoke:http
+npm run audit:hosted-sync
 npm run stress:socket
 npm run stress:actions
 ```
