@@ -15,13 +15,19 @@ declare global {
 
 let supabase: SupabaseClient | undefined;
 let supabasePromise: Promise<SupabaseClient> | undefined;
+let ephemeralVisitorId: string | undefined;
 
 export async function getSupabase(): Promise<SupabaseClient | undefined> {
   if (!supabaseUrl || !supabaseKey) return undefined;
   if (supabase) return supabase;
-  supabasePromise ??= import('@supabase/supabase-js').then(({ createClient }) => createClient(supabaseUrl, supabaseKey));
-  supabase = await supabasePromise;
-  return supabase;
+  try {
+    supabasePromise ??= import('@supabase/supabase-js').then(({ createClient }) => createClient(supabaseUrl, supabaseKey));
+    supabase = await supabasePromise;
+    return supabase;
+  } catch {
+    supabasePromise = undefined;
+    return undefined;
+  }
 }
 
 export interface ClientSession {
@@ -33,21 +39,28 @@ export interface ClientSession {
 
 export async function ensureClientSession(): Promise<ClientSession> {
   const visitorId = getVisitorId();
-  const supabase = await getSupabase();
-  if (!supabase) return { visitorId, anonymous: true };
-  let { data } = await supabase.auth.getSession();
-  if (!data.session) {
-    const captchaToken = turnstileSiteKey ? await requestTurnstileToken(turnstileSiteKey) : undefined;
-    const result = await supabase.auth.signInAnonymously({ options: { captchaToken } });
-    if (result.error) throw result.error;
-    data = { session: result.data.session };
+  try {
+    const supabase = await getSupabase();
+    if (!supabase) return { visitorId, anonymous: true };
+    const current = await supabase.auth.getSession();
+    if (current.error) return { visitorId, anonymous: true };
+    let { data } = current;
+    if (!data.session) {
+      const captchaToken = turnstileSiteKey ? await requestTurnstileToken(turnstileSiteKey) : undefined;
+      const result = await supabase.auth.signInAnonymously({ options: { captchaToken } });
+      if (result.error) return { visitorId, anonymous: true };
+      data = { session: result.data.session };
+    }
+    return {
+      visitorId,
+      token: data.session?.access_token,
+      session: data.session ?? undefined,
+      anonymous: Boolean(data.session?.user.is_anonymous),
+    };
+  } catch {
+    // Accounts enhance persistence; they are not a prerequisite for a room.
+    return { visitorId, anonymous: true };
   }
-  return {
-    visitorId,
-    token: data.session?.access_token,
-    session: data.session ?? undefined,
-    anonymous: Boolean(data.session?.user.is_anonymous),
-  };
 }
 
 async function requestTurnstileToken(siteKey: string): Promise<string> {
@@ -91,9 +104,22 @@ async function requestTurnstileToken(siteKey: string): Promise<string> {
 }
 
 export function getVisitorId(): string {
-  const existing = localStorage.getItem('cambrio:visitor');
-  if (existing) return existing;
-  const next = crypto.randomUUID().replaceAll('-', '');
-  localStorage.setItem('cambrio:visitor', next);
-  return next;
+  try {
+    const existing = localStorage.getItem('cambrio:visitor');
+    if (existing && /^[a-zA-Z0-9_-]{10,64}$/.test(existing)) {
+      ephemeralVisitorId = existing;
+      return existing;
+    }
+  } catch {
+    // Some privacy modes expose Storage but reject every operation. A stable
+    // in-memory ID still preserves this tab's reconnect identity.
+  }
+  if (ephemeralVisitorId) return ephemeralVisitorId;
+  ephemeralVisitorId = crypto.randomUUID().replaceAll('-', '');
+  try {
+    localStorage.setItem('cambrio:visitor', ephemeralVisitorId);
+  } catch {
+    // Guest play remains available when persistence is blocked.
+  }
+  return ephemeralVisitorId;
 }

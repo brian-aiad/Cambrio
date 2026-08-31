@@ -106,7 +106,7 @@ async function performAction(identity: ServerIdentity, body: Extract<RealtimeReq
   const code = actionCode(action, body.membership);
   const lockKey = code ?? `create:${identity.userId}`;
 
-  const completed = await withRoomLock(lockKey, async () => {
+  const completed = await withRoomLock<{ response: RealtimeResponse; signal?: { code: string; revision: number; actorPlayerId?: string } }>(lockKey, async () => {
     const manager = new RoomManager(createPersistence());
     if (code) {
       const room = await manager.get(code);

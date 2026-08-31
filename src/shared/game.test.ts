@@ -186,6 +186,11 @@ describe('turns and stacking', () => {
     game = applyGameCommand(game, { type: 'DRAW', playerId: activeId }, 2_000, fixedRandom).state;
     game = applyGameCommand(game, { type: 'DISCARD_DRAWN', playerId: activeId }, 2_001, fixedRandom).state;
     const stacked = applyGameCommand(game, { type: 'STACK_ATTEMPT', playerId: stacker.id, targetCardId: opponentCard, discardGeneration: game.discardGeneration }, 2_002, fixedRandom);
+    expect(projectGame(stacked.state, activeId).lastPublicEvent).toEqual({
+      type: 'stack',
+      playerId: stacker.id,
+      version: stacked.state.version,
+    });
     game = stacked.state;
     expect(stacked.effects.some((effect) => effect.type === 'stack')).toBe(true);
     expect(game.transfer).toEqual(expect.objectContaining({ fromPlayerId: stacker.id, toPlayerId: activeId }));

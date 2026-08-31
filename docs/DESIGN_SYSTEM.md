@@ -4,6 +4,8 @@ Cambrio should feel like a focused native card game, not a themed casino page. T
 
 ## Visual language
 
+The implementation centralizes product tokens in `:root`: raised/subtle surfaces, panel/control/card radii, restrained elevation, mint focus rings, fast/state motion durations, and a shared ease-out curve. Components should consume those tokens instead of introducing a new radius, glow, or transition for each state.
+
 - **Ink** `#1b1d36` / `#25293d`: navigation, type, card outlines, and the darkest feedback surfaces.
 - **Table indigo** `#42457f` / `#343665`: a quiet woven-grid playing surface. No faux wood, gold filigree, neon casino glow, or ornamental texture; restrained illumination is reserved for the active turn and moving cards.
 - **Action violet** `#5c56c8`: primary decisions and Cambrio. Violet is never used as a decorative page wash.
@@ -20,7 +22,9 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 
 - Starting slots are always TL, TR, BL, BR. Removing or replacing a card never moves the other identities.
 - Fifth and sixth local cards occupy stable +1/+2 positions without reordering TL/TR/BL/BR.
-- Seven opponents use a 4+3 portrait grid when height permits. On 320×568-class screens they become a readable swipe rail that automatically follows the active seat; the clipped edge and fade communicate additional seats without shrinking cards into illegible icons. Desktop and landscape retain one row. Seat order and each opponent's TL/TR/BL/BR geometry never change.
+- Seven opponents use a 4+3 portrait grid at every portrait height, including 320×568. That narrowest layout reduces only remote-card scale so every identity remains visible at once while the local four-card hand keeps full, direct targets. Landscape and desktop retain one row. Seat order and each opponent's TL/TR/BL/BR geometry never change.
+- In seven- and eight-player portrait games, opponent targeting uses a focus-plus-overview model. The stable 4+3 seat grid never reflows: the player first chooses an opponent, then a compact focus panel promotes only that opponent's TL/TR/BL/BR/+1/+2 slots to 47–50px direct targets. Roomier and landscape layouts retain one-tap in-place card targeting.
+- The local viewer may occupy any authoritative seat. Their hand is always promoted to the bottom interaction zone while opponents retain authoritative relative order; disconnect, turn, and ready state never reorder the ring.
 - Empty slots remain outlined and labeled. The absence of a card is meaningful game information.
 
 ## Direct interaction
@@ -31,19 +35,22 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 - Other players never borrow the viewer's private draw panel. Their hidden draw travels from the deck to a named, face-down decision card physically attached to their seat. That card remains staged through **DRAWING → CHOOSING**, then becomes the exact source for **DISCARDING** or **SWAPPING**.
 - A local draw keeps its decision surface hidden through the card's landing frames, then reveals the card and controls together. A white empty panel must never flash underneath a card in flight.
 - During an open stack race, tap any remembered table card directly. There is no stack-mode button and no player-selection modal.
-- Power cards immediately mark only legal targets. A compact numbered action strip shows the completed and current step; the selected source stays visibly numbered on the physical card, so Jack/Queen and Black King never depend on a sentence to explain what happens next. Regular-height dense rails avoid repeated badges; the shortest swipe rail restores them because its larger targets can carry the step marker clearly.
+- Power cards immediately mark only legal targets. A compact numbered action strip shows the completed and current step; the selected source stays visibly numbered on the physical card, so Jack/Queen and Black King never depend on a sentence to explain what happens next. Dense portrait mode quiets unrelated seats, labels the chosen opponent, and uses peek/swap marks on the focused cards rather than repeating numbered badges across every remote hand.
 - Peeks reveal immediately after one legal card tap, remain visible for a short timed memory window, then conceal and complete automatically. Leaving or blurring the window conceals immediately.
 - Black King selects one owned card and then one opponent card, reveals both for the same timed memory window, then offers **Swap** or **Keep**.
 - The Black King decision is a distinct concealed server state: both ranks are removed from the browser projection before **Swap** or **Keep** appears.
 - Action hit areas never translate while awaiting input. The deck signals readiness with light and shadow only, so a fast touch, keyboard activation, and browser automation all acquire the same stable target.
 - A full mobile lobby becomes a two-column eight-seat grid with a visible capacity meter and an on-screen deal/ready control, including at 320×568. Join, ready, remove, draw, discard, target, and decision taps show a local pending state while waiting for the authoritative acknowledgement.
+- Short-height lobby rules give occupied and empty seats the same compact row height. A partially filled room must never be taller than a full room or push the ready/deal action below a 320×568 viewport.
+- Clipboard failure stays inline beside the room heading, names the shareable room code, remains visible in the shortest mobile layout, and does not rely on a transient toast.
 - Discard and replacement acknowledgements use explicit **Discarding…** and **Swapping cards…** copy plus a restrained spinner; legal targets lock immediately so slow networks cannot look like a missed tap or accept a second decision.
+- One browser serializes conflicting authoritative intents while a request is pending. This prevents draw/power/Cambrio/stack races from the same expected version without weakening simultaneous stack attempts from different players.
 - Turn ownership uses coordinated copy, shape, and motion: the header names the player, their fixed hand receives a mint outline, the local label changes to **YOUR TURN**, the deck label changes from **DECK** to **DRAW**, and the 45-second clock uses a numeric progress ring. No single cue carries the meaning alone.
 
 ## Motion and feedback
 
 - A card identity keeps a shared layout identity while moving between slots and piles; the animation communicates the state change instead of decorating it.
-- Blind swaps and Black King exchanges animate two numbered, face-down cards between their exact player and slot endpoints on a deliberate 1.44-second path. A persistent movement card names both player/slot endpoints while the destinations remain empty until arrival, so there is no ambiguous duplicate state.
+- Blind swaps and Black King exchanges animate two numbered, face-down cards between their exact player and slot endpoints on a sub-second path. Draw, discard/stack, transfer, and two-card exchange use approximately 0.48s, 0.54s, 0.66s, and 0.82s respectively: readable on the first round without slowing the fiftieth. A short public movement cue names player/slot endpoints while the destination remains empty until arrival, so there is no ambiguous duplicate state.
 - A normal hand replacement and a successful stack animate from the exact source slot to discard. The travelling card turns face-up before arrival, making the public card change observable to every player.
 - Replacements use two numbered paths with staggered starts: the old slot lifts first toward discard, then the staged hidden draw follows into that exact vacancy. Wrong-stack penalties likewise travel from the deck into the recipient's stable +1/+2 slot instead of appearing instantly.
 - Cambrio and zero-card endings occupy the permanent turn-status column with the current player and remaining-turn count; they never cover an opponent card.
@@ -60,9 +67,14 @@ Card faces also use code-native SVG suit marks rather than operating-system suit
 
 - Primary controls meet the 44px iPhone convention; game cards remain large direct targets in normal portrait play. The compact home screen exposes a first-viewport action that moves directly to the entry form. The narrowest portrait and landscape compactions preserve readable card labels and full card height.
 - The mobile table respects iPhone notch and home-indicator safe areas and suppresses page overscroll, keeping rapid stack taps inside the game surface.
-- Every hidden card has an accessible spatial name (for example, “bottom left card”), and interactive states add “tap to select.”
+- Every hidden card has an accessible spatial name (for example, “bottom left card”). Interactive labels state the authorized action, such as **tap to attempt stack**, **peek target**, or **swap target**, without exposing the face.
 - Focus uses the same mint target language as touch highlighting. Color is always paired with copy, shape, or motion.
+- Rules, account, and pause dialogs trap focus, support Escape when dismissal is legal, and restore focus to the invoking control. Mandatory states remain non-dismissible.
+- Sound settings live in both the desktop utility bar and the player panel, keeping effects and ambience available when compact mobile chrome hides secondary utility icons.
 - Duplicate client decisions are locked while awaiting acknowledgement. The server additionally coalesces identical in-flight action IDs, rate-limits guess spam, and remains authoritative for every result.
+- Initial hold-to-peek handles pointer up, pointer leave, pointer cancellation, blur, and page hiding. It conceals locally before sending completion, including when cancellation arrives before the start acknowledgement.
+- Browser storage is an enhancement rather than a prerequisite: blocked `localStorage` keeps a stable in-memory guest identity for the active tab, and blocked `sessionStorage` does not invalidate hosted action responses.
+- Create/join intent entered before the realtime connection finishes is held as a visible **Connecting…** state and submitted exactly once after transport recovery, instead of becoming a dead Enter key or ambiguous tap.
 - A temporary transport failure keeps the table visible in a **Reconnecting** state. Recovery restores the same server-owned seat; only session initialization failures use the fatal screen.
 - Full or active tables use a dedicated queue screen with a stable position, seated-player count, explicit departure, and automatic promotion when a seat becomes available.
 - A host removal invalidates that socket’s membership and returns the removed player home with a short explanation; no client remains on a stale table.

@@ -11,6 +11,7 @@ import { GameRuleError } from '../shared/game.js';
 import { gameActionSchema, handleSchema, roomActionSchema, displayNameSchema, type ActionAck, type ServerNotice } from '../shared/protocol.js';
 import { AuthService, type ServerIdentity } from './auth.js';
 import { createPersistence } from './persistence.js';
+import { toPublicProfile } from './profile-api.js';
 import { RoomManager, type Membership } from './rooms.js';
 
 const port = Number(process.env.PORT ?? 3001);
@@ -71,24 +72,33 @@ app.get('/api/health', (_request, response) => {
 });
 
 app.get('/api/profiles/:handle', async (request, response) => {
+  response.set('Cache-Control', 'no-store');
   const parsed = handleSchema.safeParse(request.params.handle);
   if (!parsed.success) return response.status(400).json({ error: 'Invalid handle.' });
-  const profile = await persistence.getProfileByHandle(parsed.data);
-  if (!profile || profile.anonymous) return response.status(404).json({ error: 'Profile not found.' });
-  return response.json(profile);
+  try {
+    const profile = await persistence.getProfileByHandle(parsed.data);
+    if (!profile || profile.anonymous) return response.status(404).json({ error: 'Profile not found.' });
+    response.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+    return response.json(toPublicProfile(profile));
+  } catch {
+    return response.status(503).json({ error: 'Profile service unavailable.' });
+  }
 });
 
 app.get('/api/me', async (request, response) => {
+  response.set({ 'Cache-Control': 'no-store', Vary: 'Authorization, x-visitor-id' });
   try {
     const identity = await identityFromRequest(request.headers.authorization, request.headers['x-visitor-id'] as string | undefined);
     const stats = await persistence.getStats(identity.userId);
     response.json({ ...identity, stats });
-  } catch {
-    response.status(401).json({ error: 'Authentication required.' });
+  } catch (error) {
+    const unauthorized = error instanceof Error && (error.message === 'AUTH_REQUIRED' || error.message === 'INVALID_SESSION');
+    response.status(unauthorized ? 401 : 503).json({ error: unauthorized ? 'Authentication required.' : 'Profile service unavailable.' });
   }
 });
 
 app.put('/api/me/profile', async (request, response) => {
+  response.set({ 'Cache-Control': 'no-store', Vary: 'Authorization, x-visitor-id' });
   try {
     const identity = await identityFromRequest(request.headers.authorization, request.headers['x-visitor-id'] as string | undefined);
     const handle = handleSchema.parse(request.body.handle);
@@ -96,8 +106,11 @@ app.put('/api/me/profile', async (request, response) => {
     const profile = await auth.saveProfile(identity, { handle, displayName });
     response.json(profile);
   } catch (error) {
-    const message = error instanceof Error && error.message === 'HANDLE_TAKEN' ? 'That handle is already taken.' : 'Unable to save profile.';
-    response.status(message.includes('taken') ? 409 : 400).json({ error: message });
+    if (error instanceof ZodError) return response.status(400).json({ error: 'Enter a valid handle and display name.' });
+    if (error instanceof Error && error.message === 'PERMANENT_ACCOUNT_REQUIRED') return response.status(403).json({ error: 'Link a permanent account before creating a public profile.' });
+    if (error instanceof Error && error.message === 'HANDLE_TAKEN') return response.status(409).json({ error: 'That handle is already taken.' });
+    if (error instanceof Error && (error.message === 'AUTH_REQUIRED' || error.message === 'INVALID_SESSION')) return response.status(401).json({ error: 'Authentication required.' });
+    return response.status(503).json({ error: 'Profile service unavailable.' });
   }
 });
 

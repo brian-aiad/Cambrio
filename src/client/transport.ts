@@ -47,8 +47,7 @@ class HttpRealtimeTransport implements ClientTransport {
   private failures = 0;
   private nextPollMilliseconds = 900;
   private lastPresenceAt = 0;
-  private lastRevision = -1;
-  private lastStateFingerprint = '';
+  private readonly revisionScope = new RoomRevisionScope();
   private pollRequested = false;
   private signalRoomCode?: string;
   private signalController?: AbortController;
@@ -118,10 +117,15 @@ class HttpRealtimeTransport implements ClientTransport {
     this.polling = true;
     try {
       if (this.membership) {
+        const requestedMembership = this.membership;
         const now = Date.now();
         const presence = now - this.lastPresenceAt >= 5_000;
         if (presence) this.lastPresenceAt = now;
-        this.consume(await this.request({ operation: 'sync', membership: this.membership, presence }, 7_000));
+        const response = await this.request({ operation: 'sync', membership: requestedMembership, presence }, 7_000);
+        // A leave, queue promotion, or new room action can finish while an
+        // older sync is still in flight. That response belongs to the old
+        // membership and must not resurrect or overwrite it.
+        if (sameMembership(requestedMembership, this.membership)) this.consume(response);
       }
       this.failures = 0;
       this.setConnected(true);
@@ -180,27 +184,19 @@ class HttpRealtimeTransport implements ClientTransport {
   private consume(response: HttpResponse) {
     if (response.membership) {
       this.membership = response.membership;
-      sessionStorage.setItem('cambrio:http-membership', JSON.stringify(response.membership));
+      storeHttpMembership(response.membership);
       this.followRoom(response.membership.roomCode);
     }
     if (response.state) {
       this.nextPollMilliseconds = response.state.game?.paused ? 900 : response.state.game?.stackOpen ? 250 : response.state.phase === 'lobby' ? 900 : 650;
-      const revision = Number.isFinite(response.state.revision) ? response.state.revision : undefined;
       // Polls and actions are intentionally concurrent. A slow poll must never
       // overwrite a newer action response and make the table jump backward.
-      if (acceptRoomRevision(this.lastRevision, revision)) {
-        const fingerprint = roomViewFingerprint(response.state);
-        this.lastRevision = revision ?? this.lastRevision;
-        if (fingerprint !== this.lastStateFingerprint) {
-          this.lastStateFingerprint = fingerprint;
-          this.emitLocal('room:state', response.state);
-        }
-      }
+      if (this.revisionScope.accept(response.state)) this.emitLocal('room:state', response.state);
     }
     for (const notice of response.notices ?? []) this.emitLocal('notice', notice);
     if (response.left) {
       this.membership = undefined;
-      sessionStorage.removeItem('cambrio:http-membership');
+      storeHttpMembership(undefined);
       this.followRoom(undefined);
       this.emitLocal('room:left', response.left);
     }
@@ -208,6 +204,7 @@ class HttpRealtimeTransport implements ClientTransport {
 
   private followRoom(roomCode?: string) {
     if (roomCode === this.signalRoomCode && this.signalController) return;
+    this.revisionScope.follow(roomCode);
     const generation = ++this.signalGeneration;
     this.signalController?.abort();
     window.clearTimeout(this.signalRetryTimer);
@@ -246,8 +243,9 @@ class HttpRealtimeTransport implements ClientTransport {
           if (line.startsWith('data:')) this.consumeSignalFrame(line.slice(5).trim());
         }
       }
-    } catch (error) {
-      if (!controller.signal.aborted && this.active) console.debug('Live update stream reconnecting.', error);
+    } catch {
+      // Polling is the correctness path. A transient acceleration-stream
+      // outage is expected to reconnect quietly instead of spamming consoles.
     } finally {
       if (this.signalController === controller) this.signalController = undefined;
       if (!controller.signal.aborted && this.active && generation === this.signalGeneration && roomCode === this.signalRoomCode) {
@@ -262,7 +260,7 @@ class HttpRealtimeTransport implements ClientTransport {
       if (!frame || frame[0] !== 'message') return;
       const signal = typeof frame[2] === 'string' ? JSON.parse(frame[2]) as { revision?: unknown; actorPlayerId?: unknown } : frame[2] as { revision?: unknown; actorPlayerId?: unknown } | undefined;
       if (signal?.actorPlayerId === this.membership?.playerId) return;
-      if (typeof signal?.revision === 'number' && signal.revision <= this.lastRevision) return;
+      if (typeof signal?.revision === 'number' && signal.revision <= this.revisionScope.latestRevision) return;
       this.requestImmediatePoll();
     } catch {
       // Subscription acknowledgements and keep-alive frames carry no state.
@@ -274,12 +272,12 @@ class HttpRealtimeTransport implements ClientTransport {
       const stored = JSON.parse(sessionStorage.getItem('cambrio:http-membership') ?? 'null') as HttpResponse['membership'];
       const pathCode = window.location.pathname.match(/^\/room\/([A-HJ-NP-Z2-9]{8})$/i)?.[1]?.toUpperCase();
       if (!stored || !pathCode || stored.roomCode !== pathCode) {
-        sessionStorage.removeItem('cambrio:http-membership');
+        storeHttpMembership(undefined);
         return undefined;
       }
       return stored;
     } catch {
-      sessionStorage.removeItem('cambrio:http-membership');
+      storeHttpMembership(undefined);
       return undefined;
     }
   }
@@ -296,7 +294,54 @@ class HttpRealtimeTransport implements ClientTransport {
 }
 
 export function acceptRoomRevision(latestRevision: number, incomingRevision?: number): boolean {
-  return incomingRevision === undefined || incomingRevision >= latestRevision;
+  // A legacy/malformed snapshot without a revision is safe only before the
+  // client has accepted any authoritative room state. It must never be able
+  // to replace a newer revision later in the session.
+  return incomingRevision === undefined ? latestRevision < 0 : incomingRevision >= latestRevision;
+}
+
+export function sameMembership(
+  first?: { roomCode: string; playerId: string; waiting: boolean },
+  second?: { roomCode: string; playerId: string; waiting: boolean },
+): boolean {
+  return first?.roomCode === second?.roomCode
+    && first?.playerId === second?.playerId
+    && first?.waiting === second?.waiting;
+}
+
+function storeHttpMembership(membership: HttpResponse['membership']): void {
+  try {
+    if (membership) sessionStorage.setItem('cambrio:http-membership', JSON.stringify(membership));
+    else sessionStorage.removeItem('cambrio:http-membership');
+  } catch {
+    // Hosted sync remains correct for the active page even when session
+    // persistence is unavailable; only reload recovery is reduced.
+  }
+}
+
+export class RoomRevisionScope {
+  roomCode?: string;
+  latestRevision = -1;
+  private lastFingerprint = '';
+
+  follow(roomCode?: string) {
+    if (roomCode === this.roomCode) return;
+    this.roomCode = roomCode;
+    // Revisions are monotonic within a room, not across rooms. A freshly
+    // created room commonly starts below the revision of the room just left.
+    this.latestRevision = -1;
+    this.lastFingerprint = '';
+  }
+
+  accept(state: RoomView): boolean {
+    const revision = Number.isFinite(state.revision) ? state.revision : undefined;
+    if (!acceptRoomRevision(this.latestRevision, revision)) return false;
+    this.latestRevision = revision ?? this.latestRevision;
+    const fingerprint = roomViewFingerprint(state);
+    if (fingerprint === this.lastFingerprint) return false;
+    this.lastFingerprint = fingerprint;
+    return true;
+  }
 }
 
 export function parseSignalFrame(rawFrame: string): unknown[] | undefined {

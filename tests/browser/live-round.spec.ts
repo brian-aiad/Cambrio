@@ -39,16 +39,30 @@ async function playSafeTurn(pages: Page[]) {
 }
 
 test('two real browsers complete home, lobby, peek, ending, results, and rematch', async ({ browser }) => {
+  test.setTimeout(60_000);
   const host = await isolatedPage(browser);
   const guest = await isolatedPage(browser);
   const waiter = await isolatedPage(browser, { width: 320, height: 568 });
   try {
+    await host.page.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: () => Promise.reject(new Error('clipboard unavailable')) },
+      });
+    });
     await host.page.goto('/');
     await enterName(host.page, 'Host Player');
     await host.page.getByLabel('Your display name').press('Enter');
     await expect(host.page).toHaveURL(/\/room\/[A-HJ-NP-Z2-9]{8}$/);
     const code = host.page.url().split('/').at(-1)!;
     await expect(host.page.getByRole('heading', { name: new RegExp(code) })).toBeVisible();
+    await host.page.setViewportSize({ width: 320, height: 568 });
+    await host.page.getByRole('button', { name: /copy invite link/i }).click();
+    await expect(host.page.getByRole('alert')).toContainText(`Share room code ${code}`);
+    await expect(host.page.getByRole('button', { name: /try copy again/i })).toBeVisible();
+    expect(await host.page.evaluate(() => ({ x: document.documentElement.scrollWidth - window.innerWidth, y: document.documentElement.scrollHeight - window.innerHeight }))).toEqual({ x: 0, y: 0 });
+    await expect(host.page.getByRole('button', { name: /invite one more player/i })).toBeInViewport();
+    await host.page.setViewportSize({ width: 390, height: 844 });
     await host.page.getByRole('button', { name: /how to play cambrio/i }).click();
     await expect(host.page.getByRole('dialog', { name: /remember\. trade\. stack\./i })).toBeVisible();
     await host.page.keyboard.press('Escape');
@@ -63,6 +77,24 @@ test('two real browsers complete home, lobby, peek, ending, results, and rematch
 
     await Promise.all([completeInitialPeek(host.page), completeInitialPeek(guest.page)]);
     await expect(host.page.locator('.game-page')).toBeVisible();
+    for (const playerPage of [host.page, guest.page]) {
+      const hiddenOpponentCards = playerPage.locator('.opponent-rail .playing-card');
+      await expect(hiddenOpponentCards).toHaveCount(4);
+      const exposure = await hiddenOpponentCards.evaluateAll((cards) => cards.map((card) => ({
+        label: card.getAttribute('aria-label'),
+        title: card.getAttribute('title'),
+        cardId: (card as HTMLElement).dataset.cardId,
+        hasFace: Boolean(card.querySelector('.card-front, [data-rank]')),
+        className: card.className,
+      })));
+      for (const card of exposure) {
+        expect(card.label).toMatch(/^(top left|top right|bottom left|bottom right) card(?:; tap to attempt stack)?$/i);
+        expect(card.title).toBe(card.label);
+        expect(card.cardId).toMatch(/^[A-Za-z0-9_-]{10,}$/);
+        expect(card.hasFace).toBe(false);
+        expect(card.className).not.toMatch(/\bred\b/);
+      }
+    }
     await host.page.getByRole('button', { name: /how to play cambrio/i }).click();
     await expect(host.page.getByText('Fast, public, and risky')).toBeVisible();
     await host.page.keyboard.press('Escape');
@@ -95,22 +127,85 @@ test('two real browsers complete home, lobby, peek, ending, results, and rematch
   }
 });
 
+test('guest entry remains usable when browser storage is blocked', async ({ browser }) => {
+  const client = await isolatedPage(browser, { width: 390, height: 844 });
+  try {
+    await client.page.addInitScript(() => {
+      const blocked = () => { throw new DOMException('Storage is disabled.', 'SecurityError'); };
+      Object.defineProperties(Storage.prototype, {
+        getItem: { configurable: true, value: blocked },
+        setItem: { configurable: true, value: blocked },
+        removeItem: { configurable: true, value: blocked },
+      });
+    });
+    await client.page.goto('/');
+    await expect(client.page.getByRole('heading', { name: /know your cards/i })).toBeVisible();
+    await enterName(client.page, 'Private Guest');
+    await client.page.getByRole('button', { name: /create private room/i }).click();
+    await expect(client.page).toHaveURL(/\/room\/[A-HJ-NP-Z2-9]{8}$/);
+    await expect(client.page.getByText(/private guest \(you\)/i)).toBeVisible();
+  } finally {
+    await client.context.close();
+  }
+});
+
+test('pointer cancellation always conceals the initial private peek', async ({ browser }) => {
+  test.setTimeout(45_000);
+  const host = await isolatedPage(browser);
+  const guest = await isolatedPage(browser);
+  try {
+    await host.page.goto('/');
+    await enterName(host.page, 'Pointer Host');
+    await host.page.getByRole('button', { name: /create private room/i }).click();
+    await expect(host.page).toHaveURL(/\/room\/[A-HJ-NP-Z2-9]{8}$/);
+    const code = host.page.url().split('/').at(-1)!;
+
+    await guest.page.goto(`/room/${code}`);
+    await enterName(guest.page, 'Pointer Guest');
+    await guest.page.getByRole('button', { name: /join room/i }).click();
+    await guest.page.getByRole('button', { name: /ready up/i }).click();
+    await host.page.getByRole('button', { name: /deal the cards/i }).click();
+
+    const hold = host.page.getByRole('button', { name: /hold to peek/i });
+    await hold.evaluate((element) => element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 7, pointerType: 'touch', isPrimary: true })));
+    await expect(host.page.locator('.peek-hand .playing-card:not(.face-down)')).toHaveCount(2);
+    await host.page.locator('.hold-button').evaluate((element) => element.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 7, pointerType: 'touch', isPrimary: true })));
+    await expect(host.page.locator('.peek-hand .playing-card:not(.face-down)')).toHaveCount(0);
+    await expect(host.page.locator('.waiting-ready')).toBeVisible();
+
+    await completeInitialPeek(guest.page);
+    await expect(host.page.locator('.game-page')).toBeVisible();
+  } finally {
+    await Promise.all([host.context.close(), guest.context.close()]);
+  }
+});
+
 test('eight seats and a ninth-browser queue fit compact phones and deal without overflow', async ({ browser }) => {
   test.setTimeout(90_000);
   const browsers = await Promise.all(Array.from({ length: 9 }, () => isolatedPage(browser, { width: 320, height: 568 })));
   const players = browsers.slice(0, 8);
   const waiter = browsers[8].page;
+  const longNames = [
+    "Maximillian O'Neal",
+    'WWW-WWWW-WWWW-WWWW',
+    'Alexandria-Montg',
+    'Jean-Luc Picard',
+    'Christopher-Taylor',
+    'Maria de la Cruz',
+    'Narrow Illianna',
+    "O'Connor-Wellington",
+  ];
   try {
     const host = players[0].page;
     await host.goto('/');
-    await enterName(host, 'Host');
+    await enterName(host, longNames[0]);
     await host.getByRole('button', { name: /create private room/i }).click();
     await expect(host).toHaveURL(/\/room\/[A-HJ-NP-Z2-9]{8}$/);
     const code = host.url().split('/').at(-1)!;
 
     await Promise.all(players.slice(1).map(async ({ page }, index) => {
       await page.goto(`/room/${code}`);
-      await enterName(page, `Player ${index + 2}`);
+      await enterName(page, longNames[index + 1]);
       await page.getByRole('button', { name: /join room/i }).click();
       await page.getByRole('button', { name: /ready up/i }).click();
     }));
@@ -118,6 +213,7 @@ test('eight seats and a ninth-browser queue fit compact phones and deal without 
     await expect(host.locator('.lobby-player')).toHaveCount(8);
     await expect(host.getByText('8/8 seated')).toBeVisible();
     await expect(host.getByRole('button', { name: /deal the cards/i })).toBeInViewport();
+    await expect(host.locator('.lobby-player .player-info strong')).toHaveCount(8);
     const lobbyOverflow = await host.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(lobbyOverflow).toBeLessThanOrEqual(1);
 

@@ -1,10 +1,11 @@
 import { UserRound } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { RANKS, SUITS, type CardView, type GameView, type PlayerView, type PowerKind, type PowerState } from '../shared/game.js';
 import type { ActionAck, RoomView } from '../shared/protocol.js';
 import { CambrioGlyph, Card, GameTable } from './App.js';
 
 const names = ['Brian', 'Alex', 'Maya', 'Jordan', 'Sam', 'Chris', 'Taylor', 'Devin'];
+const longNames = ["Maximillian O'Neal", 'WWW-WWWW-WWWW-WWWW', 'Alexandria-Montg', 'Jean-Luc Picard', 'Christopher-Taylor', 'María de la Cruz', 'Narrow Illianna', "O'Connor-Wellington"];
 const suits = ['clubs', 'diamonds', 'hearts', 'spades'] as const;
 const ranks = ['A', '3', '5', '7', '9', '10', 'J', 'K'] as const;
 
@@ -13,8 +14,24 @@ export function VisualAuditApp() {
   const scene = query.get('scene') ?? 'awaiting';
   const playerCount = Math.min(8, Math.max(2, Number(query.get('players') ?? 4)));
   const activeIndex = Math.min(playerCount - 1, Math.max(0, Number(query.get('active') ?? (scene === 'opponent-turn' || scene === 'opponent-drawn' || scene === 'paused' || scene === 'initial-paused' ? 1 : 0))));
+  const viewerIndex = Math.min(playerCount - 1, Math.max(0, Number(query.get('viewer') ?? 0)));
   const simulatedLatency = Math.min(2_000, Math.max(0, Number(query.get('latency') ?? 0)));
-  const [room, setRoom] = useState(() => makeRoom(scene, playerCount, activeIndex));
+  const forcedCardCount = query.get('cards') === '6' ? 6 : undefined;
+  const timerSeconds = Math.min(45, Math.max(0, Number(query.get('timer') ?? 38)));
+  const [room, setRoom] = useState(() => makeRoom(scene, playerCount, activeIndex, viewerIndex, { forcedCardCount, longNames: query.get('names') === 'long', timerSeconds }));
+  useEffect(() => {
+    if (scene !== 'opponent-reconnect' && scene !== 'black-reconnect') return;
+    const timer = window.setTimeout(() => setRoom((current) => {
+      const next = structuredClone(current);
+      if (!next.game) return current;
+      next.game.paused = undefined;
+      for (const player of next.game.players) player.connected = true;
+      next.game.version += 1;
+      next.revision = next.game.version;
+      return next;
+    }), 250);
+    return () => window.clearTimeout(timer);
+  }, [scene]);
   if (scene === 'cards') return <CardGallery />;
   const send = async (action: { type: string; targetCardId?: string; swap?: boolean }): Promise<ActionAck> => {
     if (simulatedLatency) await new Promise((resolve) => window.setTimeout(resolve, simulatedLatency));
@@ -27,10 +44,11 @@ export function VisualAuditApp() {
     return { clientActionId: 'visual-audit', ok: true, outcome };
   };
   const noop = async (): Promise<ActionAck> => ({ clientActionId: 'visual-audit', ok: true });
-  return <div className="app-shell visual-audit" data-scene={scene}>
+  const viewer = room.game?.players.find((player) => player.id === room.selfPlayerId);
+  return <div className="app-shell visual-audit" data-scene={scene} data-viewer-seat={viewer?.seat ?? viewerIndex}>
     <header className="topbar game-topbar">
       <a className="brand" href="/" title="Cambrio home"><span className="brand-mark" aria-hidden="true"><CambrioGlyph decorative /></span><span className="brand-word">cambrio</span></a>
-      <div className="top-actions"><span className="connection online"><i />Live</span><button className="profile-chip" aria-label="Profile"><UserRound size={15} /><span>Brian</span></button></div>
+      <div className="top-actions"><span className="connection online"><i />Live</span><button className="profile-chip" aria-label="Profile"><UserRound size={15} /><span>{viewer?.name ?? 'Player'}</span></button></div>
     </header>
     <GameTable room={room} send={send} sendRoom={noop} />
   </div>;
@@ -40,10 +58,10 @@ function CardGallery() {
   return <main className="card-gallery-page"><p className="eyebrow">Visual audit</p><h1>Every card face</h1><section className="card-gallery">{SUITS.flatMap((suit) => RANKS.map((rank, index) => <div key={`${rank}-${suit}`}><Card card={{ id: `gallery-${rank}-${suit}`, slot: index, rank, suit }} /><span>{rank} · {suit}</span></div>))}</section></main>;
 }
 
-function makeRoom(scene: string, playerCount: number, activeIndex: number): RoomView {
+function makeRoom(scene: string, playerCount: number, activeIndex: number, viewerIndex = 0, options: { forcedCardCount?: number; longNames?: boolean; timerSeconds?: number } = {}): RoomView {
   const isResults = scene === 'results' || scene === 'results-tie';
-  const players = Array.from({ length: playerCount }, (_, index) => makePlayer(index, scene === 'all-six' ? 6 : (scene === 'six' || scene === 'six-wrong') && index === 0 ? 6 : scene === 'zero' && index === 0 ? 0 : 4));
-  const self = players[0];
+  const players = Array.from({ length: playerCount }, (_, index) => makePlayer(index, options.forcedCardCount ?? (scene === 'all-six' ? 6 : (scene === 'six' || scene === 'six-wrong') && index === 0 ? 6 : scene === 'zero' && index === 0 ? 0 : 4), options.longNames));
+  const self = players[viewerIndex];
   const activePlayerId = players[activeIndex].id;
   const game: GameView = {
     id: `audit-${scene}`,
@@ -57,7 +75,7 @@ function makeRoom(scene: string, playerCount: number, activeIndex: number): Room
     discardGeneration: 4,
     activePlayerId,
     turnStage: 'awaiting_draw',
-    deadlineAt: Date.now() + 38_000,
+    deadlineAt: Date.now() + (options.timerSeconds ?? 38) * 1_000,
   };
 
   if (scene === 'drawn') {
@@ -72,11 +90,15 @@ function makeRoom(scene: string, playerCount: number, activeIndex: number): Room
   }
   const power = powerForScene(scene, players);
   if (power) {
-    game.stackOpen = false;
+    // Discarded powers open the same public stack race as every other discard.
+    // Keeping that race open in fixtures prevents visual tests from masking a
+    // legal concurrent interaction.
+    game.stackOpen = true;
     game.turnStage = 'power';
     game.power = power;
     game.discard = powerDiscard(power.kind);
-    for (const targetId of power.status === 'revealing' ? power.targets : []) revealTarget(players, targetId);
+    const revealWasRevoked = scene === 'opponent-reconnect' || scene === 'black-reconnect';
+    for (const targetId of power.status === 'revealing' && !revealWasRevoked ? power.targets : []) revealTarget(players, targetId);
   }
   if (scene === 'transfer') {
     game.stackOpen = false;
@@ -84,7 +106,13 @@ function makeRoom(scene: string, playerCount: number, activeIndex: number): Room
   }
   if (scene === 'ending') game.ending = { triggerPlayerId: players[1].id, reason: 'cambio', turnsRemaining: playerCount + 1 };
   if (scene === 'zero') game.ending = { triggerPlayerId: self.id, reason: 'zero_cards', turnsRemaining: playerCount };
-  if (scene === 'paused' || scene === 'initial-paused') {
+  if (scene === 'forfeited') {
+    const forfeited = players.find((player) => player.id !== self.id)!;
+    forfeited.cards = [];
+    forfeited.connected = false;
+    forfeited.forfeited = true;
+  }
+  if (scene === 'paused' || scene === 'initial-paused' || scene === 'opponent-reconnect' || scene === 'black-reconnect') {
     players[1].connected = false;
     game.paused = { playerIds: [players[1].id], remainingMs: 17_000 };
   }
@@ -103,7 +131,7 @@ function makeRoom(scene: string, playerCount: number, activeIndex: number): Room
     revision: game.version,
     phase: isResults ? 'results' : 'game',
     selfPlayerId: self.id,
-    hostPlayerId: self.id,
+    hostPlayerId: players[0].id,
     players: players.map((player, index) => ({ id: player.id, name: player.name, ready: true, connected: true, isHost: index === 0, joinedAt: index })),
     waiting: [],
     game,
@@ -238,10 +266,10 @@ function swapAuditCards(players: PlayerView[], firstId: string, secondId: string
   secondOwner.cards[secondIndex] = { id: firstId, slot: secondSlot };
 }
 
-function makePlayer(index: number, count: number): PlayerView {
+function makePlayer(index: number, count: number, useLongNames = false): PlayerView {
   return {
     id: `player-${index}`,
-    name: names[index],
+    name: (useLongNames ? longNames : names)[index],
     seat: index,
     cards: Array.from({ length: count }, (_, slot) => ({ id: `p${index}-card-${slot}`, slot })),
     connected: true,
@@ -258,11 +286,13 @@ function powerForScene(scene: string, players: PlayerView[]): PowerState | undef
     'own-reveal': { kind: 'own_peek', status: 'revealing', targets: selfCard ? [selfCard] : [] },
     'opponent-select': { kind: 'opponent_peek', status: 'selecting', targets: [] },
     'opponent-reveal': { kind: 'opponent_peek', status: 'revealing', targets: opponentCard ? [opponentCard] : [] },
+    'opponent-reconnect': { kind: 'opponent_peek', status: 'revealing', targets: opponentCard ? [opponentCard] : [] },
     'blind-own': { kind: 'blind_swap', status: 'selecting', targets: [] },
     'blind-opponent': { kind: 'blind_swap', status: 'selecting', targets: selfCard ? [selfCard] : [] },
     'black-own': { kind: 'black_king', status: 'selecting', targets: [] },
     'black-opponent': { kind: 'black_king', status: 'selecting', targets: selfCard ? [selfCard] : [] },
     'black-reveal': { kind: 'black_king', status: 'revealing', targets: selfCard && opponentCard ? [selfCard, opponentCard] : [] },
+    'black-reconnect': { kind: 'black_king', status: 'revealing', targets: selfCard && opponentCard ? [selfCard, opponentCard] : [] },
     'black-choice': { kind: 'black_king', status: 'choosing', targets: selfCard && opponentCard ? [selfCard, opponentCard] : [] },
   };
   return map[scene];

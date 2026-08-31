@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { Redis } from '@upstash/redis';
+import { nanoid } from 'nanoid';
 
 export interface StoredProfile {
   userId: string;
@@ -215,17 +216,64 @@ export class RedisPersistence implements Persistence {
     const userId = await this.client.get<string>(`cambrio:handle:${handle.toLowerCase()}`);
     if (!userId) return undefined;
     const profile = await this.getProfileByUser(userId);
-    return profile ? { ...profile, ...(await this.getStats(userId)) } : undefined;
+    if (!profile || profile.handle?.toLowerCase() !== handle.toLowerCase()) return undefined;
+    return { ...profile, ...(await this.getStats(userId)) };
   }
 
   async saveProfile(profile: StoredProfile) {
+    const lockKey = `cambrio:profile-lock:${profile.userId}`;
+    const lockOwner = nanoid();
+    let acquired = false;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      acquired = Boolean(await this.client.set(lockKey, lockOwner, { nx: true, px: 10_000 }));
+      if (acquired) break;
+      await new Promise((resolve) => setTimeout(resolve, 15 + attempt * 5));
+    }
+    if (!acquired) throw new Error('PROFILE_BUSY');
+
+    try {
+      return await this.saveProfileLocked(profile);
+    } finally {
+      await this.client.eval(
+        'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end',
+        [lockKey],
+        [lockOwner],
+      ).catch(() => undefined);
+    }
+  }
+
+  private async saveProfileLocked(profile: StoredProfile) {
+    const previous = await this.getProfileByUser(profile.userId);
+    let claimedHandleKey: string | undefined;
     if (profile.handle) {
       const handleKey = `cambrio:handle:${profile.handle.toLowerCase()}`;
       const owner = await this.client.get<string>(handleKey);
       if (owner && owner !== profile.userId) throw new Error('HANDLE_TAKEN');
-      await this.client.set(handleKey, profile.userId);
+      if (!owner) {
+        const claimed = await this.client.set(handleKey, profile.userId, { nx: true });
+        if (!claimed) throw new Error('HANDLE_TAKEN');
+        claimedHandleKey = handleKey;
+      }
     }
-    await this.client.set(`cambrio:profile:${profile.userId}`, profile);
+    try {
+      await this.client.set(`cambrio:profile:${profile.userId}`, profile);
+    } catch (error) {
+      if (claimedHandleKey) {
+        await this.client.eval(
+          'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end',
+          [claimedHandleKey],
+          [profile.userId],
+        ).catch(() => undefined);
+      }
+      throw error;
+    }
+    if (previous?.handle && previous.handle.toLowerCase() !== profile.handle?.toLowerCase()) {
+      await this.client.eval(
+        'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end',
+        [`cambrio:handle:${previous.handle.toLowerCase()}`],
+        [profile.userId],
+      );
+    }
     return profile;
   }
 

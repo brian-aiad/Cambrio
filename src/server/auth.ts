@@ -22,14 +22,17 @@ export class AuthService {
   }
 
   async authenticate(token?: string, visitorId?: string): Promise<ServerIdentity> {
-    if (this.supabase) {
-      if (!token) throw new Error('AUTH_REQUIRED');
+    if (this.supabase && token) {
       const { data, error } = await this.supabase.auth.getUser(token);
       if (error || !data.user) throw new Error('INVALID_SESSION');
       return this.identityFromUser(data.user);
     }
     const safeVisitor = visitorId?.match(/^[a-zA-Z0-9_-]{10,64}$/)?.[0] ?? nanoid();
-    const userId = `dev_${safeVisitor}`;
+    // A configured account provider may be unavailable while guest gameplay
+    // remains healthy. The hosted visitor namespace keeps that fallback
+    // consistent with the HTTP transport; supplied invalid tokens never fall
+    // through this branch.
+    const userId = `${this.supabase ? 'web' : 'dev'}_${safeVisitor}`;
     const profile = await this.persistence.getProfileByUser(userId);
     return profile ?? { userId, anonymous: true };
   }
@@ -54,4 +57,3 @@ export class AuthService {
     return identity;
   }
 }
-

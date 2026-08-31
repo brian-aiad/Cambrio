@@ -56,6 +56,12 @@ export interface EndingState {
   queue: string[];
 }
 
+export interface PublicGameEvent {
+  type: 'stack';
+  playerId: string;
+  version: number;
+}
+
 export interface PlayerResult {
   playerId: string;
   score: number | null;
@@ -76,6 +82,7 @@ export interface GameState {
   turn?: TurnState;
   transfer?: TransferState;
   ending?: EndingState;
+  lastPublicEvent?: PublicGameEvent;
   stackOpen: boolean;
   discardGeneration: number;
   stackLocks: Record<string, number>;
@@ -154,6 +161,7 @@ export interface GameView {
   power?: PowerState;
   transfer?: TransferState;
   ending?: { triggerPlayerId: string; reason: EndingState['reason']; turnsRemaining: number };
+  lastPublicEvent?: PublicGameEvent;
   results?: PlayerResult[];
 }
 
@@ -381,6 +389,10 @@ export function applyGameCommand(
       state.discard.push(command.targetCardId);
       state.stackOpen = false;
       delete state.temporaryReveals[player.id];
+      // The card's previous owner is not necessarily the player who won the
+      // race. Preserve the authoritative public actor alongside this revision
+      // so every transport and every viewer can narrate the movement correctly.
+      state.lastPublicEvent = { type: 'stack', playerId: player.id, version: state.version + 1 };
       effects.push({ type: 'stack', playerId: player.id, message: `${player.name} stacked successfully.` });
       if (owner.cards.length === 0) triggerEnding(state, owner.id, 'zero_cards');
       if (owner.id !== player.id && owner.cards.length > 0) {
@@ -462,6 +474,7 @@ export function projectGame(state: GameState, viewerId: string): GameView {
     drawnCard: drawn && state.turn?.playerId === viewerId ? cardView(drawn, -1, true) : undefined,
     power: state.turn?.playerId === viewerId ? state.turn.power : undefined,
     transfer: state.transfer?.fromPlayerId === viewerId ? state.transfer : undefined,
+    lastPublicEvent: state.lastPublicEvent,
     ending: state.ending
       ? { triggerPlayerId: state.ending.triggerPlayerId, reason: state.ending.reason, turnsRemaining: state.ending.queue.length }
       : undefined,
