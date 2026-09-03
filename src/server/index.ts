@@ -174,14 +174,13 @@ io.on('connection', (socket) => {
       clientActionId = action.clientActionId;
       if (rateLimited(clientActionId)) throw new GameRuleError('RATE_LIMIT', 'Too many actions. Pause for a moment.');
       const result = await rooms.handleGameAction(socket.data.membership, action);
-      const outcome = result.effects?.find((effect) => effect.type === 'stack' || effect.type === 'penalty' || effect.type === 'stack_lock')?.type;
       for (const effect of result.effects ?? []) {
         if (effect.message) io.to(roomChannel(socket.data.membership!.roomCode)).emit('notice', { kind: effect.type, message: effect.message, playerId: effect.playerId });
       }
       await broadcast(socket.data.membership?.roomCode);
       // State is emitted before acknowledgement so a chained interaction (the
       // initial peek release in particular) reads the newly authoritative version.
-      ack?.({ clientActionId, ok: true, outcome });
+      ack?.({ clientActionId, ok: true, outcome: result.outcome, actorPlayerId: result.actorPlayerId, stackBlockReason: result.stackBlockReason });
     } catch (error) {
       ack?.(toAck(clientActionId, error));
     }

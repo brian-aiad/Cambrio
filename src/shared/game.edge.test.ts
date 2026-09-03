@@ -61,12 +61,15 @@ describe('command safety matrix', () => {
     const generation = state.discardGeneration;
     state = applyGameCommand(state, { type: 'DRAW', playerId: active }, 2_020, random).state;
     expect(state.stackOpen).toBe(false);
-    expect(() => applyGameCommand(state, {
+    const blocked = applyGameCommand(state, {
       type: 'STACK_ATTEMPT',
       playerId: other.id,
       targetCardId: lateTarget,
       discardGeneration: generation,
-    }, 2_021, random)).toThrowError(/no longer stackable/i);
+    }, 2_021, random);
+    expect(blocked.outcome).toBe('stack_blocked');
+    expect(blocked.stackBlockReason).toBe('discard_closed');
+    expect(blocked.effects).toEqual([]);
     expect(first).toBeDefined();
   });
 
@@ -145,6 +148,7 @@ describe('command safety matrix', () => {
     }
     expect(state.players.find((player) => player.id === actor.id)!.cards).toHaveLength(MAX_HAND_CARDS);
     const missAtCap = applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: actor.id, targetCardId: wrongTarget, discardGeneration: state.discardGeneration }, 2_200, random);
+    expect(missAtCap).toMatchObject({ outcome: 'stack_blocked', stackBlockReason: 'hand_limit' });
     expect(missAtCap.effects.some((effect) => effect.type === 'stack_lock')).toBe(true);
     expect(missAtCap.state.players.find((player) => player.id === actor.id)!.cards).toHaveLength(MAX_HAND_CARDS);
     expect(() => applyGameCommand(missAtCap.state, { type: 'STACK_ATTEMPT', playerId: actor.id, targetCardId: wrongTarget, discardGeneration: state.discardGeneration }, 2_300, random)).toThrowError(/next discard/i);

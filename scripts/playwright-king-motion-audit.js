@@ -11,8 +11,8 @@ async (page) => {
   if (await page.locator('.playing-card.selected:not(.face-down)').count() !== 2) throw new Error('Black King did not focus both selected positions.');
   await page.screenshot({ path: `${root}/black-king-focused-reveal.png` });
   await page.waitForTimeout(1_750);
-  if (!(await page.locator('.interaction-prompt').textContent())?.includes('Swap positions?') || await page.locator('.playing-card:not(.face-down)').count() !== 1) throw new Error('Black King did not conceal before the decision.');
-  await page.getByRole('button', { name: 'Swap', exact: true }).click();
+  if (!(await page.locator('.interaction-prompt').textContent())?.includes('Choose whether these two cards switch places.') || await page.locator('.playing-card:not(.face-down)').count() !== 1) throw new Error('Black King did not conceal before the decision.');
+  await page.getByRole('button', { name: 'Swap cards', exact: true }).click();
   await page.waitForTimeout(100);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Black King swap did not launch both exact-position flights.');
   const routes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));

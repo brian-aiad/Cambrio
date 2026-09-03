@@ -43,10 +43,10 @@ async (page) => {
   if (await page.locator('.playing-card:not(.face-down)').count() !== 3) throw new Error('Black King did not reveal exactly two targets plus the discard.');
   await page.screenshot({ path: `${root}/black-king-auto-reveal.png` });
   await page.waitForTimeout(1_750);
-  if (!(await page.locator('.interaction-prompt').textContent())?.includes('Swap positions?')) throw new Error('Black King did not advance to the swap-or-keep choice.');
+  if (!(await page.locator('.interaction-prompt').textContent())?.includes('Choose whether these two cards switch places.')) throw new Error('Black King did not advance to the swap-or-keep choice.');
   if (await page.locator('.playing-card:not(.face-down)').count() !== 1) throw new Error('Black King target ranks remained in the rendered choice state after concealment.');
   if (await page.locator('.selection-order').count() !== 2) throw new Error('Black King did not retain both numbered position markers for its decision.');
-  await page.getByRole('button', { name: 'Swap', exact: true }).click();
+  await page.getByRole('button', { name: 'Swap cards', exact: true }).click();
   await page.waitForTimeout(160);
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Black King swap did not launch two exact-position card flights.');
   const kingRoutes = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => `${element.getAttribute('data-flight-from')} -> ${element.getAttribute('data-flight-to')}`));
@@ -58,8 +58,10 @@ async (page) => {
   await page.goto('http://localhost:5173/__visual-audit?scene=blind-opponent&players=8');
   await page.waitForTimeout(300);
   if (await page.locator('.opponent-rail .target-cue:visible').count() !== 0) throw new Error('The dense eight-player rail repeated target badges across every card.');
-  if (await page.locator('.opponent-rail .playing-card.target-option').count() !== 28) throw new Error('The dense rail lost a legal blind-swap target.');
+  if (await page.locator('.opponent-rail .target-focus-control').count() !== 7) throw new Error('The dense rail did not expose every legal opponent as a first-step target.');
   if (!(await page.locator('.action-sequence').textContent())?.includes('Their card')) throw new Error('The dense rail has no visual current-step indicator.');
+  await page.locator('.opponent-rail .target-focus-control').last().click();
+  if (await page.locator('.dense-target-panel .playing-card.target-option').count() !== 4) throw new Error('The dense focus panel did not promote the chosen opponent’s four stable slots.');
 
-  return { ownPeek: 'auto', opponentPeek: 'auto', blindSwap: 'numbered two taps', blackKing: 'numbered reveal then swap', denseEightPlayerTargets: 28 };
+  return { ownPeek: 'auto', opponentPeek: 'auto', blindSwap: 'numbered two taps', blackKing: 'numbered reveal then swap', denseEightPlayerTargets: '7 opponents then 4 stable slots' };
 }

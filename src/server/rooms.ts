@@ -8,6 +8,8 @@ import {
   type GameCommand,
   type GameEffect,
   type GameState,
+  type StackBlockReason,
+  type StackOutcome,
   type TurnStage,
 } from '../shared/game.js';
 import type { GameAction, RoomAction, RoomPlayerView, RoomView } from '../shared/protocol.js';
@@ -66,6 +68,9 @@ export interface ManagerResult {
   membership?: Membership;
   effects?: GameEffect[];
   message?: string;
+  outcome?: StackOutcome;
+  actorPlayerId?: string;
+  stackBlockReason?: StackBlockReason;
 }
 
 export class RoomManager {
@@ -234,9 +239,16 @@ export class RoomManager {
     }
     const command = toGameCommand(action, player.id);
     const transition = applyGameCommand(room.game, command, Date.now(), secureRandom);
+    const changed = transition.state.version !== room.game.version;
     room.game = transition.state;
-    await this.afterTransition(room, transition.effects);
-    return { membership, effects: transition.effects };
+    if (changed) await this.afterTransition(room, transition.effects);
+    return {
+      membership,
+      effects: transition.effects,
+      outcome: transition.outcome,
+      actorPlayerId: transition.actorPlayerId,
+      stackBlockReason: transition.stackBlockReason,
+    };
   }
 
   async disconnect(code: string, playerId: string, explicitLeave = false): Promise<void> {
@@ -609,7 +621,12 @@ export class RoomManager {
   }
 
   private withoutRepeatedEffects(result: ManagerResult): ManagerResult {
-    return { membership: result.membership };
+    return {
+      membership: result.membership,
+      outcome: result.outcome,
+      actorPlayerId: result.actorPlayerId,
+      stackBlockReason: result.stackBlockReason,
+    };
   }
 
   private rememberAction(id: string, result: ManagerResult): void {

@@ -20,11 +20,12 @@ async (page) => {
   await page.screenshot({ path: `${root}/stack-correct-transfer-390x844.png` });
   if (await page.locator('.card-flight').count() !== 1) throw new Error('Successful stack did not animate the selected card to discard.');
   if ((await page.locator('.card-flight').getAttribute('data-flight-from')) !== 'Alex BR' || (await page.locator('.card-flight').getAttribute('data-flight-to')) !== 'Discard') throw new Error('Successful stack did not preserve its exact Alex BR to discard route.');
-  if (await page.locator('.table-action-cue').count() !== 0) throw new Error('Stack flight added a redundant swap caption over the stack result.');
+  const stackCue = page.locator('.table-action-cue.stack');
+  if (await stackCue.count() !== 1 || !(await stackCue.textContent())?.includes('Brian stacked') || !(await stackCue.textContent())?.includes('Alex BR')) throw new Error('Stack activity did not identify the actor and exact source slot.');
   if (await page.locator('[aria-label="Alex\'s cards"] .playing-card').count() !== 3) throw new Error('Successful stack did not remove the exact opponent card.');
   if (await page.locator('.stack-result.correct').count() !== 1) throw new Error('Successful stack feedback is not visible.');
   if (await page.locator('.stack-hint').evaluateAll((elements) => elements.some((element) => Number(window.getComputedStyle(element).opacity) > 0.1))) throw new Error('Stack window stayed visibly open after a successful stack.');
-  if (!(await page.locator('.action-sequence').textContent())?.includes('Give a card')) throw new Error('Opponent stack did not enter the mandatory transfer flow.');
+  if (!(await page.locator('.transfer-prompt').textContent())?.includes('Give Alex one card')) throw new Error('Opponent stack did not enter the mandatory transfer flow.');
   if (await page.locator('.self-zone .target-cue.give').count() !== 4) throw new Error('Mandatory transfer did not mark every legal gift card directly.');
   if ((await page.locator('.flight-front strong').textContent()) !== '8') throw new Error('Successful stack flight did not reveal the matching rank on its way to discard.');
   await page.waitForTimeout(520);

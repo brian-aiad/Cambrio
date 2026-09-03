@@ -1,8 +1,11 @@
-/* eslint-disable @typescript-eslint/no-unused-expressions, no-undef */
-async (page) => {
+/* global window, document */
+import { mkdir } from 'node:fs/promises';
+
+export default async function runLiveEightAudit(page) {
   const browser = page.context().browser();
   if (!browser) throw new Error('The Playwright browser is unavailable.');
   const outputRoot = 'output/playwright/live';
+  await mkdir(outputRoot, { recursive: true });
   const roomNames = ['Brian', 'Alex', 'Maya', 'Jordan', 'Sam', 'Chris', 'Taylor', 'Devin'];
   const guestContexts = [];
   const pages = [page];

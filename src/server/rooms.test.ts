@@ -467,6 +467,44 @@ describe('RoomManager integration', () => {
     }
   });
 
+  it('returns stable typed outcomes for a winner, a race loser, and an idempotent duplicate', async () => {
+    const { manager, hostMembership, guestMembership } = await startedRoom();
+    await completePeek(manager, hostMembership);
+    await completePeek(manager, guestMembership);
+    let room = (await manager.get(hostMembership.roomCode))!;
+    const activeMembership = room.game!.turn!.playerId === hostMembership.playerId ? hostMembership : guestMembership;
+    const otherMembership = activeMembership.playerId === hostMembership.playerId ? guestMembership : hostMembership;
+    const active = room.game!.players.find((player) => player.id === activeMembership.playerId)!;
+    const other = room.game!.players.find((player) => player.id === otherMembership.playerId)!;
+    const activeTarget = active.cards[0];
+    const otherTarget = other.cards[0];
+    room.game!.cards[otherTarget].rank = room.game!.cards[activeTarget].rank;
+    const forcedDraw = room.game!.deck.find((id) => room.game!.cards[id].rank === room.game!.cards[activeTarget].rank)!;
+    const forcedIndex = room.game!.deck.indexOf(forcedDraw);
+    [room.game!.deck[forcedIndex], room.game!.deck[room.game!.deck.length - 1]] = [room.game!.deck.at(-1)!, forcedDraw];
+    await manager.handleGameAction(activeMembership, gameAction({ type: 'DRAW' }, room.game!.version));
+    room = (await manager.get(room.code))!;
+    await manager.handleGameAction(activeMembership, gameAction({ type: 'DISCARD_DRAWN' }, room.game!.version));
+    room = (await manager.get(room.code))!;
+    const generation = room.game!.discardGeneration;
+    const loserCards = room.game!.players.find((player) => player.id === otherMembership.playerId)!.cards.length;
+    const winnerAction = { type: 'STACK_ATTEMPT', targetCardId: activeTarget, discardGeneration: generation, clientActionId: `winner-${++actionNumber}`, expectedVersion: room.game!.version } as GameAction;
+    const loserAction = { type: 'STACK_ATTEMPT', targetCardId: otherTarget, discardGeneration: generation, clientActionId: `loser-${++actionNumber}`, expectedVersion: room.game!.version } as GameAction;
+
+    const winner = await manager.handleGameAction(activeMembership, winnerAction);
+    expect(winner).toMatchObject({ outcome: 'stack_success', actorPlayerId: activeMembership.playerId });
+    const duplicate = await manager.handleGameAction(activeMembership, winnerAction);
+    expect(duplicate).toMatchObject({ outcome: 'stack_success', actorPlayerId: activeMembership.playerId });
+    expect(duplicate.effects).toBeUndefined();
+    room = (await manager.get(room.code))!;
+    const checkpointAfterWinner = room.checkpointVersion;
+    const lost = await manager.handleGameAction(otherMembership, loserAction);
+    expect(lost).toMatchObject({ outcome: 'stack_race_lost', actorPlayerId: activeMembership.playerId, effects: [] });
+    room = (await manager.get(room.code))!;
+    expect(room.game!.players.find((player) => player.id === otherMembership.playerId)?.cards).toHaveLength(loserCards);
+    expect(room.checkpointVersion).toBe(checkpointAfterWinner);
+  });
+
   it('promotes a waiting player after results and allows their stale membership to play the rematch', async () => {
     const { manager, hostMembership, guestMembership } = await startedRoom();
     const waitingIdentity: ServerIdentity = { userId: 'waiting-user', anonymous: true };

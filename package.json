@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --pool=threads --no-file-parallelism",
-    "test:browser": "playwright test",
+    "test:browser": "playwright test tests/browser/motion-performance.spec.ts && playwright test tests/browser/accessibility.spec.ts tests/browser/live-round.spec.ts tests/browser/live-stack-race.spec.ts tests/browser/visual-layout.spec.ts",
     "test:browser:ui": "playwright test --ui",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -29,10 +29,11 @@
     "smoke:signal": "node scripts/realtime-signal-smoke.mjs",
     "stress:socket": "node scripts/socket-load-smoke.mjs",
     "stress:actions": "node scripts/action-spam-smoke.mjs",
-    "audit:eight": "node scripts/eight-player-audit.mjs",
+    "audit:eight": "playwright test tests/browser/live-eight-audit.spec.js --reporter=line",
+    "audit:eight:attach": "node scripts/eight-player-audit.mjs",
     "audit:hosted-sync": "node scripts/hosted-sync-audit.mjs",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
-    "check:release": "npm run check && npm run test:browser && npm run smoke:runtime && npm run smoke:reconnect && npm run smoke:signal && npm run smoke:http && npm run stress:actions && npm run stress:socket"
+    "check:release": "npm run check && npm run test:browser && node scripts/release-smokes.mjs"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",

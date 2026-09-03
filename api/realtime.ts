@@ -136,7 +136,9 @@ async function performAction(identity: ServerIdentity, body: Extract<RealtimeReq
         ack: {
           clientActionId: action.clientActionId,
           ok: true,
-          outcome: result.effects?.find((effect) => effect.type === 'stack' || effect.type === 'penalty' || effect.type === 'stack_lock')?.type,
+          outcome: result.outcome,
+          actorPlayerId: result.actorPlayerId,
+          stackBlockReason: result.stackBlockReason,
         },
         membership,
         state: room ? manager.view(room, membership.playerId) : undefined,

@@ -158,7 +158,13 @@ try {
   await Promise.all(clients.map((client) => sync(client)));
   const generation = clients[0].state!.game!.discardGeneration;
   const race = await Promise.all(clients.map((client) => gameAction(client, { type: 'STACK_ATTEMPT', targetCardId: matchingCard, discardGeneration: generation })));
-  if (race.filter((result) => result.ack?.ok && result.ack.outcome === 'stack').length !== 1) throw new Error('The distributed stack race did not produce exactly one winner.');
+  const winners = race.filter((result) => result.ack?.ok && result.ack.outcome === 'stack_success');
+  const raceLosers = race.filter((result) => result.ack?.ok && result.ack.outcome === 'stack_race_lost');
+  if (winners.length !== 1 || raceLosers.length !== race.length - 1) {
+    throw new Error(`The distributed stack race produced ${winners.length} winner(s) and ${raceLosers.length} race loser(s).`);
+  }
+  if (raceLosers.some((result) => result.notices?.some((notice) => notice.kind === 'penalty'))) throw new Error('A legitimate distributed race loser received a penalty notice.');
+  if (raceLosers.some((result) => result.ack?.actorPlayerId !== winners[0].ack?.actorPlayerId)) throw new Error('Distributed race losers did not agree on the winning actor.');
 
   const removedMembership = clients[7].membership!;
   const removal = await roomAction(clients[0], { type: 'ROOM_REMOVE', playerId: removedMembership.playerId });

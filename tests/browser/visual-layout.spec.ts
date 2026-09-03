@@ -408,6 +408,22 @@ test('short landscape keeps opponent seats, local slots, piles, and contextual p
   }
 });
 
+test('minimum portrait keeps the live stack cue clear of cards and piles', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/__visual-audit?scene=awaiting&players=8');
+  const geometry = await page.evaluate(() => {
+    const hint = document.querySelector<HTMLElement>('.stack-hint')!.getBoundingClientRect();
+    const protectedRegions = [...document.querySelectorAll<HTMLElement>('.discard-stack, .deck-card, .self-zone .hand-cards')].map((element) => element.getBoundingClientRect());
+    const intersects = (first: DOMRect, second: DOMRect) => first.left < second.right - 1 && first.right > second.left + 1 && first.top < second.bottom - 1 && first.bottom > second.top + 1;
+    return {
+      contained: hint.left >= 0 && hint.right <= innerWidth && hint.top >= 0 && hint.bottom <= innerHeight,
+      collisions: protectedRegions.filter((region) => intersects(hint, region)).length,
+    };
+  });
+  expect(geometry.contained).toBe(true);
+  expect(geometry.collisions).toBe(0);
+});
+
 test('Black King choices stay legible and preserve the stack window on compact phones', async ({ page }) => {
   for (const viewport of [{ width: 320, height: 568 }, { width: 390, height: 844 }, { width: 568, height: 320 }]) {
     await page.setViewportSize(viewport);
@@ -467,6 +483,12 @@ test('a discarded power preserves the concurrent stack race and table-wide Cambr
   await localStack.click();
   await expect(page.locator('.self-zone .playing-card')).toHaveCount(3);
   await expect(page.locator('.interaction-prompt')).toContainText(/Choose an opponent/i);
+
+  await page.goto('/__visual-audit?scene=blind-opponent&players=8&viewer=0&active=0');
+  const remoteStack = page.locator('.opponent-rail [data-card-id="p7-card-3"]');
+  await expect(remoteStack).toHaveAttribute('aria-label', /tap to attempt stack/i);
+  await remoteStack.click();
+  await expect(page.locator('.transfer-prompt')).toContainText(/give devin one card/i);
 
   await page.goto('/__visual-audit?scene=transfer&players=8&viewer=0&active=0');
   const callDuringTransfer = page.getByRole('button', { name: /call cambrio/i });
@@ -570,14 +592,17 @@ test('maximum-length player names truncate without changing seat geometry and re
       const label = element.getAttribute('aria-label');
       const visibleName = element.querySelector<HTMLElement>('.seat-identity b')!;
       const seat = element.closest<HTMLElement>('.player-hand')!;
+      const labelBounds = element.getBoundingClientRect();
+      const seatBounds = seat.getBoundingClientRect();
       return {
         label,
-        contained: element.getBoundingClientRect().left >= seat.getBoundingClientRect().left - 1 && element.getBoundingClientRect().right <= seat.getBoundingClientRect().right + 1,
+        contained: labelBounds.left >= seatBounds.left - 1 && labelBounds.right <= seatBounds.right + 1,
+        bounds: { labelLeft: labelBounds.left, labelRight: labelBounds.right, seatLeft: seatBounds.left, seatRight: seatBounds.right },
         ellipsis: getComputedStyle(visibleName).textOverflow,
       };
     }));
     expect(names.every((name) => Boolean(name.label && name.label.length > 15))).toBe(true);
-    expect(names.every((name) => name.contained)).toBe(true);
+    expect(names.every((name) => name.contained), `${viewport.width}×${viewport.height}: ${JSON.stringify(names)}`).toBe(true);
     expect(names.every((name) => name.ellipsis === 'ellipsis')).toBe(true);
     const metrics = await layoutMetrics(page);
     expect(metrics.documentOverflow.x).toBeLessThanOrEqual(1);
@@ -626,6 +651,43 @@ test('mobile gameplay copy never clips inside its rendered control or status reg
       expect(clipped, `${scene} clips gameplay copy at ${viewport.width}x${viewport.height}`).toEqual([]);
     }
   }
+});
+
+test('a stack race loser settles without a penalty and names the authoritative winner', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__visual-audit?scene=stack-race-lost&players=8');
+  const before = await page.locator('.self-zone .playing-card').count();
+  await page.locator('.self-zone .playing-card').first().click();
+  await expect(page.locator('.stack-result.race-lost')).toContainText('Alex got there first');
+  await expect(page.locator('.stack-result.race-lost')).toContainText('Your card stayed in place');
+  await expect(page.locator('.self-zone .playing-card')).toHaveCount(before);
+  await expect(page.locator('.card-flight')).toHaveCount(0);
+  await expect(page.locator('.stack-result.wrong')).toHaveCount(0);
+});
+
+test('a six-card miss explains the hand-limit lock instead of claiming the race moved on', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__visual-audit?scene=six-wrong&players=8');
+  await page.locator('.self-zone .playing-card').first().click();
+  await expect(page.locator('.stack-result.blocked.hand_limit')).toContainText('No match');
+  await expect(page.locator('.stack-result.blocked.hand_limit')).toContainText('Hand full—wait for the next discard');
+  await expect(page.locator('.stack-result')).not.toContainText('table already moved on');
+  await expect(page.locator('.self-zone .playing-card')).toHaveCount(6);
+  await expect(page.locator('.card-flight')).toHaveCount(0);
+});
+
+test('private peek context names the exact slot while observer projections contain no private face', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__visual-audit?scene=own-reveal&players=8&viewer=0&active=0');
+  await expect(page.locator('.power-prompt')).toContainText(/your top left card/i);
+  await expect(page.locator('.power-prompt')).toContainText(/only you can see this face/i);
+  await expect(page.locator('.self-zone [aria-label*="5 of clubs"]')).toHaveCount(1);
+
+  await page.goto('/__visual-audit?scene=own-reveal&players=8&viewer=2&active=0&observer=1');
+  await expect(page.locator('.power-prompt')).toHaveCount(0);
+  await expect(page.locator('[aria-label*=" of "]')).toHaveCount(1); // Public discard only.
+  const privateArtifacts = await page.locator('[data-card-id], [aria-label], [class]').evaluateAll((elements) => elements.filter((element) => /5 of clubs|p0-card-0.*(rank|clubs)|top left card.*5/i.test(`${element.getAttribute('aria-label')} ${element.className}`)).length);
+  expect(privateArtifacts).toBe(0);
 });
 
 test('the card gallery renders one accessible face for all 52 unique cards', async ({ page }) => {

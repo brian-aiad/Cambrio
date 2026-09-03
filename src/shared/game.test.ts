@@ -167,7 +167,7 @@ describe('turns and stacking', () => {
     const stackedPlayer = game.players.find((player) => player.id === stacker.id)!;
     expect(stackedPlayer.cards).toHaveLength(3);
     for (const cardId of stackedPlayer.cards) expect(stackedPlayer.cardSlots[cardId]).toBe(rememberedSlots[cardId]);
-    expect(() => applyGameCommand(game, { type: 'STACK_ATTEMPT', playerId: active, targetCardId: game.players.find((player) => player.id === active)!.cards[0], discardGeneration: game.discardGeneration }, 2_200, fixedRandom)).toThrowError(/no longer stackable/i);
+    expect(applyGameCommand(game, { type: 'STACK_ATTEMPT', playerId: active, targetCardId: game.players.find((player) => player.id === active)!.cards[0], discardGeneration: game.discardGeneration }, 2_200, fixedRandom).outcome).toBe('stack_race_lost');
   });
 
   it('stacks an opponent card into its exact slot, then fills that vacancy with the gifted card', () => {
@@ -186,11 +186,13 @@ describe('turns and stacking', () => {
     game = applyGameCommand(game, { type: 'DRAW', playerId: activeId }, 2_000, fixedRandom).state;
     game = applyGameCommand(game, { type: 'DISCARD_DRAWN', playerId: activeId }, 2_001, fixedRandom).state;
     const stacked = applyGameCommand(game, { type: 'STACK_ATTEMPT', playerId: stacker.id, targetCardId: opponentCard, discardGeneration: game.discardGeneration }, 2_002, fixedRandom);
-    expect(projectGame(stacked.state, activeId).lastPublicEvent).toEqual({
+    expect(projectGame(stacked.state, activeId).lastPublicEvent).toEqual(expect.objectContaining({
       type: 'stack',
       playerId: stacker.id,
       version: stacked.state.version,
-    });
+      sourcePlayerId: activeId,
+      discardGeneration: stacked.state.discardGeneration,
+    }));
     game = stacked.state;
     expect(stacked.effects.some((effect) => effect.type === 'stack')).toBe(true);
     expect(game.transfer).toEqual(expect.objectContaining({ fromPlayerId: stacker.id, toPlayerId: activeId }));
@@ -361,6 +363,7 @@ describe('special powers', () => {
     expect(game.players.find((player) => player.id === activeId)!.cardSlots[opponentTarget]).toBe(ownSlot);
     expect(game.players.find((player) => player.id === opponent.id)!.cardSlots[ownTarget]).toBe(opponentSlot);
     expect(game.temporaryReveals[activeId]).toBeUndefined();
+    expect(game.lastPublicEvent).toMatchObject({ type: 'power', playerId: activeId, powerKind: 'black_king', version: game.version });
   });
 
   it.each(['hearts', 'diamonds'] as const)('red King of %s ends the turn without offering Black King controls', (suit) => {

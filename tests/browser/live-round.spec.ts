@@ -277,10 +277,13 @@ test('spectators see opponent draws staged at that player before discard or repl
       const actor = northActs ? north.page : south.page;
       const observer = northActs ? south.page : north.page;
       const actorName = northActs ? 'North' : 'South';
-      await actor.locator('.deck-card').click();
       const drawFlight = observer.locator('.card-flight');
-      await expect(drawFlight).toHaveAttribute('data-flight-from', 'Deck');
-      await expect(drawFlight).toHaveAttribute('data-flight-to', `${actorName}'s draw`);
+      const drawStory = Promise.all([
+        expect(drawFlight).toHaveAttribute('data-flight-from', 'Deck'),
+        expect(drawFlight).toHaveAttribute('data-flight-to', `${actorName}'s draw`),
+      ]);
+      await actor.locator('.deck-card').click();
+      await drawStory;
       await expect(observer.locator('.decision-owner')).toContainText(actorName);
       await expect(observer.locator('.decision-owner')).toContainText(/drawing|choosing/i);
       await expect(observer.locator('.swap-flight-layer')).toHaveCount(0, { timeout: 1_500 });
@@ -288,18 +291,25 @@ test('spectators see opponent draws staged at that player before discard or repl
       await expect(observer.locator('.decision-owner')).toContainText('CHOOSING');
 
       if (decision === 'discard') {
+        const discardFlight = observer.locator('.card-flight');
+        const discardStory = Promise.all([
+          expect(discardFlight).toHaveAttribute('data-flight-from', `${actorName}'s draw`),
+          expect(discardFlight).toHaveAttribute('data-flight-to', 'Discard'),
+        ]);
         await actor.getByRole('button', { name: /^discard$/i }).click();
-        await expect(observer.locator('.card-flight')).toHaveAttribute('data-flight-from', `${actorName}'s draw`);
-        await expect(observer.locator('.card-flight')).toHaveAttribute('data-flight-to', 'Discard');
+        await discardStory;
         await expect(observer.locator('.decision-owner')).toContainText('DISCARDING');
       } else {
-        await actor.locator('.self-zone .playing-card').first().click();
         const flights = observer.locator('.card-flight');
-        await expect(flights).toHaveCount(2);
-        await expect(flights.nth(0)).toHaveAttribute('data-flight-from', `${actorName} TL`);
-        await expect(flights.nth(0)).toHaveAttribute('data-flight-to', 'Discard');
-        await expect(flights.nth(1)).toHaveAttribute('data-flight-from', `${actorName}'s draw`);
-        await expect(flights.nth(1)).toHaveAttribute('data-flight-to', `${actorName} TL`);
+        const replaceStory = Promise.all([
+          expect(flights).toHaveCount(2),
+          expect(flights.nth(0)).toHaveAttribute('data-flight-from', `${actorName} TL`),
+          expect(flights.nth(0)).toHaveAttribute('data-flight-to', 'Discard'),
+          expect(flights.nth(1)).toHaveAttribute('data-flight-from', `${actorName}'s draw`),
+          expect(flights.nth(1)).toHaveAttribute('data-flight-to', `${actorName} TL`),
+        ]);
+        await actor.locator('.self-zone .playing-card').first().click();
+        await replaceStory;
         await expect(observer.locator('.decision-owner')).toContainText('SWAPPING');
       }
       await expect(observer.locator('.swap-flight-layer')).toHaveCount(0, { timeout: 2_000 });

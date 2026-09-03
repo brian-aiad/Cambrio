@@ -31,12 +31,13 @@ async (page) => {
 
   await page.goto('http://localhost:5173/__visual-audit?scene=drawn&players=4');
   await page.waitForTimeout(400);
+  const targetSlot = page.locator('.self-zone .hand-slot[data-slot="0"]');
   const target = page.locator('.self-zone [data-card-id="p0-card-0"]');
-  const before = await target.boundingBox();
+  const before = await targetSlot.boundingBox();
   await target.click();
   await page.waitForTimeout(1_450);
   const landed = page.locator('.self-zone [data-card-id="drawn-10"][data-slot="0"]');
-  const after = await landed.boundingBox();
+  const after = await targetSlot.boundingBox();
   if (!before || !after || Math.abs(before.x - after.x) > .5 || Math.abs(before.y - after.y) > .5 || Math.abs(before.width - after.width) > .5 || Math.abs(before.height - after.height) > .5) throw new Error(`Replacement shifted the memorized TL slot: ${JSON.stringify({ before, after })}`);
   if (await page.locator('.target-option, .flight-receiving, .swap-flight-layer, .covered-discard').count()) throw new Error('Replacement left target or arrival state mounted while idle.');
   const idleBorderOpacity = Number(await landed.evaluate((element) => window.getComputedStyle(element, '::after').opacity));
@@ -46,13 +47,14 @@ async (page) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await page.goto('http://localhost:5173/__visual-audit?scene=blind-opponent&players=8');
   await page.waitForTimeout(350);
-  await page.locator('.opponent-rail [data-card-id="p7-card-3"]').click();
+  await page.locator('[data-player-seat="player-7"] .target-focus-control').click();
+  await page.locator('.dense-target-panel .playing-card[data-slot="3"]').click();
   await page.waitForTimeout(100);
   if (await page.locator('.flight-endpoint').count()) throw new Error('Legacy hollow flight endpoints returned.');
   if (await page.locator('.card-flight').count() !== 2) throw new Error('Eight-player exchange does not show both moving cards.');
-  const fixedOrigins = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => ({ left: element.style.left, top: element.style.top, transform: element.style.transform })));
+  const fixedOrigins = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => ({ left: element.style.left, top: element.style.top, transform: window.getComputedStyle(element).transform })));
   await page.waitForTimeout(280);
-  const movedTransforms = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => ({ left: element.style.left, top: element.style.top, transform: element.style.transform })));
+  const movedTransforms = await page.locator('.card-flight').evaluateAll((elements) => elements.map((element) => ({ left: element.style.left, top: element.style.top, transform: window.getComputedStyle(element).transform })));
   if (movedTransforms.some((state, index) => state.left !== fixedOrigins[index].left || state.top !== fixedOrigins[index].top || state.transform === fixedOrigins[index].transform)) throw new Error('Card exchange is not transform-only or did not visibly move.');
   await page.screenshot({ path: `${root}/eight-player-transform-flight-320x568.png` });
   await page.waitForTimeout(1_050);

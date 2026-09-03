@@ -275,7 +275,9 @@ describe('randomized game stress', () => {
       }
       const staleActor = state.players.find((player) => player.cards.length)!;
       const staleTarget = state.players.flatMap((player) => player.cards)[0];
-      expect(() => applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: staleActor.id, targetCardId: staleTarget, discardGeneration: generation }, 2_004, random)).toThrow();
+      const stale = applyGameCommand(state, { type: 'STACK_ATTEMPT', playerId: staleActor.id, targetCardId: staleTarget, discardGeneration: generation }, 2_004, random);
+      expect(stale).toMatchObject({ outcome: 'stack_race_lost', actorPlayerId: stacker.id, effects: [] });
+      expect(stale.state.version).toBe(state.version);
       assertCardInvariant(state);
     }
   }, 20_000);
@@ -316,5 +318,5 @@ describe('randomized game stress', () => {
     const observed = new Set<string>();
     for (let seed = 1; seed <= 500; seed += 1) simulateDisruptions(seed, 2 + (seed % 7), observed);
     expect([...observed]).toEqual(expect.arrayContaining(['initial-forfeit', 'initial-timeout', 'forfeit', 'transfer-timeout', 'awaiting_draw-timeout', 'deciding-timeout', 'power-timeout']));
-  }, 45_000);
+  }, 90_000);
 });

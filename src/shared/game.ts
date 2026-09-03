@@ -57,10 +57,19 @@ export interface EndingState {
 }
 
 export interface PublicGameEvent {
-  type: 'stack';
+  type: 'stack' | 'power' | 'penalty' | 'transfer' | 'cambio';
   playerId: string;
   version: number;
+  eventId?: string;
+  targetPlayerId?: string;
+  sourcePlayerId?: string;
+  sourceSlot?: number;
+  discardGeneration?: number;
+  powerKind?: PowerKind;
 }
+
+export type StackOutcome = 'stack_success' | 'stack_wrong' | 'stack_race_lost' | 'stack_blocked';
+export type StackBlockReason = 'discard_closed' | 'hand_limit';
 
 export interface PlayerResult {
   playerId: string;
@@ -86,6 +95,7 @@ export interface GameState {
   stackOpen: boolean;
   discardGeneration: number;
   stackLocks: Record<string, number>;
+  stackWinners: Record<number, string>;
   temporaryReveals: Record<string, string[]>;
   results?: PlayerResult[];
   createdAt: number;
@@ -119,6 +129,9 @@ export interface GameEffect {
 export interface TransitionResult {
   state: GameState;
   effects: GameEffect[];
+  outcome?: StackOutcome;
+  actorPlayerId?: string;
+  stackBlockReason?: StackBlockReason;
 }
 
 export interface CardView {
@@ -245,6 +258,7 @@ export function createGame(
     stackOpen: false,
     discardGeneration: 0,
     stackLocks: {},
+    stackWinners: {},
     temporaryReveals: {},
     createdAt: now,
   };
@@ -358,10 +372,16 @@ export function applyGameCommand(
     }
     case 'STACK_ATTEMPT': {
       requireActiveGame(state);
-      if (state.transfer) fail('TRANSFER_PENDING', 'A mandatory card transfer is pending.');
-      if (!state.stackOpen || command.discardGeneration !== state.discardGeneration) {
-        fail('STACK_CLOSED', 'That discard is no longer stackable.');
+      // A stack command is forever tied to the generation the client saw.
+      // Classify a consumed generation before transfer, ownership, or rank
+      // checks so network latency can never turn a legitimate race loss into
+      // a mismatch penalty against a newer discard.
+      const raceWinner = (state.stackWinners ?? {})[command.discardGeneration];
+      if (raceWinner) return { state, effects, outcome: 'stack_race_lost', actorPlayerId: raceWinner };
+      if (command.discardGeneration !== state.discardGeneration || !state.stackOpen) {
+        return { state, effects, outcome: 'stack_blocked', stackBlockReason: 'discard_closed' };
       }
+      if (state.transfer) fail('TRANSFER_PENDING', 'A mandatory card transfer is pending.');
       if (player.cards.length === 0) fail('NO_CARDS', 'A zero-card player cannot stack.');
       state.stackLocks ??= {};
       if (state.stackLocks[player.id] === state.discardGeneration) fail('STACK_LOCKED', 'Wait for the next discard before stacking again.');
@@ -373,7 +393,8 @@ export function applyGameCommand(
         if (player.cards.length >= MAX_HAND_CARDS) {
           state.stackLocks[player.id] = state.discardGeneration;
           effects.push({ type: 'stack_lock', playerId: player.id, message: `${player.name} missed and must wait for the next discard.` });
-          break;
+          state.version += 1;
+          return { state, effects, outcome: 'stack_blocked', stackBlockReason: 'hand_limit' };
         }
         const penalty = drawCard(state, random);
         if (!penalty) {
@@ -382,23 +403,35 @@ export function applyGameCommand(
         } else {
           addOwnedCard(player, penalty);
           effects.push({ type: 'penalty', playerId: player.id, message: `${player.name} missed and drew a penalty.` });
+          state.lastPublicEvent = publicEvent(state, 'penalty', player.id);
         }
-        break;
+        state.version += 1;
+        return { state, effects, outcome: 'stack_wrong' };
       }
+      const sourceSlot = cardSlot(owner, command.targetCardId, owner.cards.indexOf(command.targetCardId));
       removeOwnedCard(owner, command.targetCardId);
       state.discard.push(command.targetCardId);
       state.stackOpen = false;
+      state.stackWinners ??= {};
+      state.stackWinners[state.discardGeneration] = player.id;
+      for (const generation of Object.keys(state.stackWinners).map(Number).sort((first, second) => second - first).slice(8)) delete state.stackWinners[generation];
       delete state.temporaryReveals[player.id];
       // The card's previous owner is not necessarily the player who won the
       // race. Preserve the authoritative public actor alongside this revision
       // so every transport and every viewer can narrate the movement correctly.
-      state.lastPublicEvent = { type: 'stack', playerId: player.id, version: state.version + 1 };
+      state.lastPublicEvent = {
+        ...publicEvent(state, 'stack', player.id),
+        sourcePlayerId: owner.id,
+        sourceSlot,
+        discardGeneration: state.discardGeneration,
+      };
       effects.push({ type: 'stack', playerId: player.id, message: `${player.name} stacked successfully.` });
       if (owner.cards.length === 0) triggerEnding(state, owner.id, 'zero_cards');
       if (owner.id !== player.id && owner.cards.length > 0) {
         state.transfer = { fromPlayerId: player.id, toPlayerId: owner.id, deadlineAt: now + TURN_MS };
       }
-      break;
+      state.version += 1;
+      return { state, effects, outcome: 'stack_success', actorPlayerId: player.id };
     }
     case 'TRANSFER_CARD': {
       if (!state.transfer || state.transfer.fromPlayerId !== player.id) fail('NO_TRANSFER', 'No transfer is pending.');
@@ -409,6 +442,7 @@ export function applyGameCommand(
       requireActiveGame(state);
       if (state.ending) fail('ENDING_STARTED', 'The ending sequence has already started.');
       triggerEnding(state, player.id, 'cambio');
+      state.lastPublicEvent = publicEvent(state, 'cambio', player.id);
       effects.push({ type: 'cambio', playerId: player.id, message: `${player.name} called Cambrio.` });
       break;
     }
@@ -581,6 +615,11 @@ function openDiscard(state: GameState, cardId: string): void {
   state.stackOpen = true;
 }
 
+function publicEvent(state: GameState, type: PublicGameEvent['type'], playerId: string): PublicGameEvent {
+  const version = state.version + 1;
+  return { type, playerId, version, eventId: `${state.id}:${version}:${type}` };
+}
+
 function discardDrawn(
   state: GameState,
   player: EnginePlayer,
@@ -594,6 +633,7 @@ function discardDrawn(
   if (power && hasLegalPowerTarget(state, player, power)) {
     state.turn = { playerId: player.id, stage: 'power', power: { kind: power, status: 'selecting', targets: [] }, deadlineAt: now + TURN_MS };
     effects.push({ type: 'power', playerId: player.id });
+    state.lastPublicEvent = { ...publicEvent(state, 'power', player.id), powerKind: power };
   } else {
     endTurn(state, now, effects);
   }
@@ -643,6 +683,7 @@ function selectPowerTarget(
     } else {
       if (owner.id === player.id) fail('OPPONENT_TARGET_REQUIRED', "Choose an opponent's card.");
       const summary = swapOwnedCards(state, power.targets[0], cardId);
+      state.lastPublicEvent = { ...publicEvent(state, 'power', player.id), powerKind: power.kind };
       effects.push({ type: 'power', playerId: player.id, message: `Blind swap · ${summary}.` });
       endTurn(state, now, effects);
       return;
@@ -680,6 +721,7 @@ function completePower(
   if (power.kind === 'black_king' && swap && power.targets.length === 2) {
     if (canSwapOwnedCards(state, power.targets[0], power.targets[1])) {
       const summary = swapOwnedCards(state, power.targets[0], power.targets[1]);
+      state.lastPublicEvent = { ...publicEvent(state, 'power', player.id), powerKind: power.kind };
       effects.push({ type: 'power', playerId: player.id, message: `Black King · ${summary}.` });
     } else {
       effects.push({ type: 'power', playerId: player.id, message: 'A selected card moved before the swap, so the cards stay where they are.' });
@@ -724,6 +766,11 @@ function transferCard(state: GameState, cardId: string, now: number, effects: Ga
   removeOwnedCard(from, cardId);
   addOwnedCard(to, cardId);
   state.transfer = undefined;
+  state.lastPublicEvent = {
+    ...publicEvent(state, 'transfer', from.id),
+    sourcePlayerId: from.id,
+    targetPlayerId: to.id,
+  };
   effects.push({ type: 'transfer', playerId: from.id, message: `${from.name} gave a hidden card to ${to.name}.` });
   if (from.cards.length === 0) triggerEnding(state, from.id, 'zero_cards');
   if (state.turn) state.turn.deadlineAt = now + TURN_MS;

@@ -18,7 +18,17 @@ export function VisualAuditApp() {
   const simulatedLatency = Math.min(2_000, Math.max(0, Number(query.get('latency') ?? 0)));
   const forcedCardCount = query.get('cards') === '6' ? 6 : undefined;
   const timerSeconds = Math.min(45, Math.max(0, Number(query.get('timer') ?? 38)));
-  const [room, setRoom] = useState(() => makeRoom(scene, playerCount, activeIndex, viewerIndex, { forcedCardCount, longNames: query.get('names') === 'long', timerSeconds }));
+  const observerMode = query.get('observer') === '1';
+  const [room, setRoom] = useState(() => {
+    const initial = makeRoom(scene, playerCount, activeIndex, viewerIndex, { forcedCardCount, longNames: query.get('names') === 'long', timerSeconds });
+    if (observerMode && initial.game?.power) {
+      const powerKind = initial.game.power.kind;
+      initial.game.power = undefined;
+      initial.game.lastPublicEvent = { type: 'power', playerId: initial.game.activePlayerId!, version: initial.game.version, powerKind };
+      for (const player of initial.game.players) player.cards = player.cards.map((card) => ({ id: card.id, slot: card.slot }));
+    }
+    return initial;
+  });
   useEffect(() => {
     if (scene !== 'opponent-reconnect' && scene !== 'black-reconnect') return;
     const timer = window.setTimeout(() => setRoom((current) => {
@@ -33,15 +43,19 @@ export function VisualAuditApp() {
     return () => window.clearTimeout(timer);
   }, [scene]);
   if (scene === 'cards') return <CardGallery />;
-  const send = async (action: { type: string; targetCardId?: string; swap?: boolean }): Promise<ActionAck> => {
+  const send = async (action: { type: string; targetCardId?: string; cardId?: string; swap?: boolean }): Promise<ActionAck> => {
     if (simulatedLatency) await new Promise((resolve) => window.setTimeout(resolve, simulatedLatency));
     let outcome: ActionAck['outcome'];
+    let actorPlayerId: string | undefined;
+    let stackBlockReason: ActionAck['stackBlockReason'];
     setRoom((current) => {
       const result = applyAuditAction(current, action, scene);
       outcome = result.outcome;
+      actorPlayerId = result.actorPlayerId;
+      stackBlockReason = result.stackBlockReason;
       return result.room;
     });
-    return { clientActionId: 'visual-audit', ok: true, outcome };
+    return { clientActionId: 'visual-audit', ok: true, outcome, actorPlayerId, stackBlockReason };
   };
   const noop = async (): Promise<ActionAck> => ({ clientActionId: 'visual-audit', ok: true });
   const viewer = room.game?.players.find((player) => player.id === room.selfPlayerId);
@@ -145,7 +159,7 @@ function powerDiscard(kind: PowerKind): CardView {
         : faceCard('discard-black-king', -1, 'K', 'spades');
 }
 
-function applyAuditAction(room: RoomView, action: { type: string; targetCardId?: string; swap?: boolean }, scene: string): { room: RoomView; outcome?: ActionAck['outcome'] } {
+function applyAuditAction(room: RoomView, action: { type: string; targetCardId?: string; cardId?: string; swap?: boolean }, scene: string): { room: RoomView; outcome?: ActionAck['outcome']; actorPlayerId?: string; stackBlockReason?: ActionAck['stackBlockReason'] } {
   const next = structuredClone(room);
   const game = next.game!;
   const self = game.players.find((player) => player.id === next.selfPlayerId)!;
@@ -198,6 +212,7 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
       power.targets = [action.targetCardId];
     } else if (power.kind === 'blind_swap') {
       swapAuditCards(game.players, power.targets[0], action.targetCardId);
+      game.lastPublicEvent = { type: 'power', playerId: self.id, version: game.version + 1, eventId: `${game.id}:${game.version + 1}:power`, powerKind: power.kind };
       game.power = undefined;
       game.turnStage = 'awaiting_draw';
       game.activePlayerId = followingPlayer;
@@ -210,7 +225,10 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
     game.power.status = 'choosing';
     for (const player of game.players) player.cards = player.cards.map((card) => game.power!.targets.includes(card.id) ? { id: card.id, slot: card.slot } : card);
   } else if (action.type === 'POWER_COMPLETE') {
-    if (game.power?.kind === 'black_king' && action.swap && game.power.targets.length === 2) swapAuditCards(game.players, game.power.targets[0], game.power.targets[1]);
+    if (game.power?.kind === 'black_king' && action.swap && game.power.targets.length === 2) {
+      swapAuditCards(game.players, game.power.targets[0], game.power.targets[1]);
+      game.lastPublicEvent = { type: 'power', playerId: self.id, version: game.version + 1, eventId: `${game.id}:${game.version + 1}:power`, powerKind: game.power.kind };
+    }
     game.power = undefined;
     game.turnStage = 'awaiting_draw';
     game.activePlayerId = followingPlayer;
@@ -218,23 +236,32 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
     game.power = undefined;
     game.turnStage = 'awaiting_draw';
     game.activePlayerId = followingPlayer;
+  } else if (action.type === 'TRANSFER_CARD' && action.cardId && game.transfer) {
+    const recipient = game.players.find((player) => player.id === game.transfer?.toPlayerId);
+    const cardIndex = self.cards.findIndex((card) => card.id === action.cardId);
+    if (recipient && cardIndex >= 0) {
+      const [card] = self.cards.splice(cardIndex, 1);
+      recipient.cards.push({ id: card.id, slot: Math.max(-1, ...recipient.cards.map((candidate) => candidate.slot)) + 1 });
+      game.transfer = undefined;
+    }
   } else if (action.type === 'CALL_CAMBIO') {
     game.phase = 'ending';
     game.ending = { triggerPlayerId: self.id, reason: 'cambio', turnsRemaining: game.players.length + 1 };
   } else if (action.type === 'STACK_ATTEMPT' && action.targetCardId) {
+    if (scene === 'stack-race-lost') return { room: next, outcome: 'stack_race_lost', actorPlayerId: game.players.find((player) => player.id !== self.id)!.id };
     if (scene === 'stack-wrong' || scene === 'six-wrong') {
       if (self.cards.length >= 6) {
         game.stackLocked = true;
         game.version += 1;
         next.revision = game.version;
-        return { room: next, outcome: 'stack_lock' };
+        return { room: next, outcome: 'stack_blocked', stackBlockReason: 'hand_limit' };
       }
       const slot = Math.max(3, ...self.cards.map((card) => card.slot)) + 1;
       self.cards.push({ id: `penalty-${slot}`, slot });
       game.deckCount = Math.max(0, game.deckCount - 1);
       game.version += 1;
       next.revision = game.version;
-      return { room: next, outcome: 'penalty' };
+      return { room: next, outcome: 'stack_wrong' };
     }
     const owner = game.players.find((player) => player.cards.some((card) => card.id === action.targetCardId));
     const target = owner?.cards.find((card) => card.id === action.targetCardId);
@@ -243,11 +270,12 @@ function applyAuditAction(room: RoomView, action: { type: string; targetCardId?:
       game.discard = faceCard(target.id, -1, '8', 'clubs');
       game.stackOpen = false;
       game.discardGeneration += 1;
+      game.lastPublicEvent = { type: 'stack', playerId: self.id, version: game.version + 1 };
       if (owner.id !== self.id) game.transfer = { fromPlayerId: self.id, toPlayerId: owner.id, deadlineAt: Date.now() + 38_000 };
     }
     game.version += 1;
     next.revision = game.version;
-    return { room: next, outcome: 'stack' };
+    return { room: next, outcome: 'stack_success' };
   }
   game.version += 1;
   next.revision = game.version;

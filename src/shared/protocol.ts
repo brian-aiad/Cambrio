@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { GameCommand, GameEffect, GameView } from './game.js';
+import type { GameCommand, GameEffect, GameView, StackBlockReason, StackOutcome } from './game.js';
 
 export interface IdentityView {
   userId: string;
@@ -36,8 +36,12 @@ export interface ActionAck {
   ok: boolean;
   code?: string;
   message?: string;
-  outcome?: GameEffect['type'];
+  outcome?: StackOutcome;
+  actorPlayerId?: string;
+  stackBlockReason?: StackBlockReason;
 }
+
+export const stackOutcomeSchema = z.enum(['stack_success', 'stack_wrong', 'stack_race_lost', 'stack_blocked']);
 
 export interface ServerNotice {
   kind: GameEffect['type'] | 'info' | 'error';
